@@ -180,6 +180,8 @@ def test_appimage_script_supports_a_gui_variant():
     apprun = (APPIMAGE / "AppRun").read_text(encoding="utf-8")
     assert "airflash-ui" in apprun, "AppRun must be able to launch the GUI"
     assert "is_cli_command" in apprun, "AppRun must dispatch CLI commands"
+    # No arguments must not read $1: AppRun runs under `set -u`.
+    assert '"${1:-}" = "gui"' in apprun, "AppRun must guard $1 when launched with no arguments"
     # A bad variant fails loudly instead of silently building the backend image.
     assert "VARIANT must be backend or full" in script
 

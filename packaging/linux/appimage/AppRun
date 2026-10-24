@@ -42,9 +42,9 @@ is_cli_command() {
     return 1
 }
 
-if [ "$#" -eq 0 ] || [ "$1" = "gui" ]; then
+if [ "$#" -eq 0 ] || [ "${1:-}" = "gui" ]; then
     if [ -x "$GUI" ]; then
-        if [ "$1" = "gui" ]; then shift; fi
+        if [ "${1:-}" = "gui" ]; then shift; fi
         exec "$GUI" "$@"
     fi
     if [ "$#" -eq 0 ]; then
