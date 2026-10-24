@@ -1,4 +1,4 @@
-# <img src="desktop/AirFlash.App/Assets/app.svg" width="36" height="36" alt="" style="vertical-align:middle" /> AirFlash
+# <img src="desktop/AirFlash.App/Assets/app.svg" width="36" height="36" alt="" style="vertical-align:middle" /> AirFlash Linux
 
 <p align="center">
   <a href="README.md">English</a> ·
@@ -8,6 +8,16 @@
 <p align="center">
   <img src="docs/images/airflash-en.png" alt="AirFlash English interface" width="550" />
 </p>
+
+**AirFlash Linux** is the Linux build of AirFlash: an AirPlay 2 sender for
+streaming desktop audio to HomePod and HomePod stereo pairs. It ships as a
+self-contained AppImage for **Linux x86_64 and aarch64 (ARM64)**, with an
+Avalonia graphical panel and a headless `airflash-cli`, and reuses the same
+native AirPlay 2 sender as the Windows build.
+
+Keywords: AirPlay 2 sender for Linux, stream Linux audio to HomePod, HomePod
+stereo pair on Linux, AirFlash AppImage, aarch64 / ARM64 HomePod streaming,
+TuneBlade alternative for Linux.
 
 AirFlash supports existing two-device stereo pairs and low-latency playback from Windows.
 Stream Windows desktop audio to HomePod through a native AirPlay 2 sender,

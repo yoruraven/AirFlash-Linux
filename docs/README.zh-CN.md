@@ -1,4 +1,4 @@
-# <img src="../desktop/AirFlash.App/Assets/app.svg" width="36" height="36" alt="" style="vertical-align:middle" /> AirFlash
+# <img src="../desktop/AirFlash.App/Assets/app.svg" width="36" height="36" alt="" style="vertical-align:middle" /> AirFlash Linux
 
 <p align="center">
   <a href="../README.md">English</a> ·
@@ -8,6 +8,14 @@
 <p align="center">
   <img src="images/airflash-zh-CN.png" alt="AirFlash 中文界面" width="550" />
 </p>
+
+**AirFlash Linux** 是 AirFlash 的 Linux 版本：通过原生 AirPlay 2 发送端，把 Linux
+桌面音频流送到 HomePod 及 HomePod 立体声组合。提供 **Linux x86_64 与 aarch64
+（ARM64）** 的自包含 AppImage，既有 Avalonia 图形面板，也有无界面的
+`airflash-cli`，与 Windows 版共用同一个原生发送端。
+
+关键词：Linux AirPlay 2 发送端、Linux 向 HomePod 串流、HomePod 立体声组合、AirFlash
+AppImage、aarch64 / ARM64、TuneBlade 的 Linux 替代方案。
 
 AirFlash 支持现有的双 HomePod 立体声组合和 Windows 低延迟播放。
 通过原生 AirPlay 2 发送端，将 Windows 桌面声音发送到 HomePod，支持 HomePod OS 27。
