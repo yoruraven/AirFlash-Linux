@@ -9,6 +9,10 @@
   <img src="images/airflash-zh-CN.png" alt="AirFlash 中文界面" width="550" />
 </p>
 
+<p align="center">
+  <img src="images/airflash-linux-gnome.png" alt="AirFlash 在 Linux（GNOME）上的界面" width="550" />
+</p>
+
 AirFlash 支持现有的双 HomePod 立体声组合和 Windows 低延迟播放。
 通过原生 AirPlay 2 发送端，将 Windows 桌面声音发送到 HomePod，支持 HomePod OS 27。
 

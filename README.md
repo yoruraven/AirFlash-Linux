@@ -9,6 +9,10 @@
   <img src="docs/images/airflash-en.png" alt="AirFlash English interface" width="550" />
 </p>
 
+<p align="center">
+  <img src="docs/images/airflash-linux-gnome.png" alt="AirFlash panel on Linux (GNOME)" width="550" />
+</p>
+
 AirFlash supports existing two-device stereo pairs and low-latency playback from Windows.
 Stream Windows desktop audio to HomePod through a native AirPlay 2 sender,
 with support for HomePod OS 27.
