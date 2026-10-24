@@ -67,18 +67,25 @@ fn tlv(data: &[u8]) -> Vec<u8> {
     out
 }
 pub fn announce(clock: u64, seq: u16, ns: u64) -> Vec<u8> {
+    // IEEE 1588-2008 announce: originTimestamp (10), currentUtcOffset (2),
+    // one reserved byte (1), then grandmaster priority/quality/identity.
+    // The reserved byte at offset 46 was missing, shifting every later field
+    // and preventing HomePods from selecting this clock (they'd light up but
+    // stay silent because the clock never locked).
     let mut p = header(11, 76, clock, seq, 0x0408, 0);
     timestamp(&mut p[34..44], ns);
-    // Local oscillator; priority is a preference, not a claim of GPS accuracy.
-    p[47] = 96;
-    p[48] = 248;
-    p[49] = 0xfe;
-    p[50..52].copy_from_slice(&0xffffu16.to_be_bytes());
-    p[52] = 128;
-    p[53..61].copy_from_slice(&clock.to_be_bytes());
-    p[63] = 0xa0;
-    p[64..68].copy_from_slice(&[0, 8, 0, 8]);
-    p[68..].copy_from_slice(&clock.to_be_bytes());
+    p[44..46].copy_from_slice(&0u16.to_be_bytes()); // currentUtcOffset
+    p[46] = 0; // reserved
+    p[47] = 128; // grandmasterPriority1
+    p[48] = 248; // clockClass (local oscillator, not GPS)
+    p[49] = 0xfe; // clockAccuracy
+    p[50..52].copy_from_slice(&0xffffu16.to_be_bytes()); // variance
+    p[52] = 128; // grandmasterPriority2
+    p[53..61].copy_from_slice(&clock.to_be_bytes()); // grandmasterIdentity
+    p[61..63].copy_from_slice(&0u16.to_be_bytes()); // stepsRemoved
+    p[63] = 0xa0; // timeSource
+    p[64..68].copy_from_slice(&[0, 8, 0, 8]); // PATH_TRACE TLV header
+    p[68..].copy_from_slice(&clock.to_be_bytes()); // clock ID in TLV
     p
 }
 pub fn sync_pair(clock: u64, seq: u16, ns: u64) -> (Vec<u8>, Vec<u8>) {
@@ -214,6 +221,17 @@ mod tests {
         assert_eq!(s.len(), 44);
         assert_eq!(f.len(), 96);
         assert_eq!(&f[34..44], &[0, 0, 0, 0, 0, 1, 13, 251, 56, 210]);
-        assert_eq!(announce(id, 0, 0).len(), 76);
+        let announced = announce(id, 0, 0);
+        assert_eq!(announced.len(), 76);
+        // IEEE 1588 announce: currentUtcOffset (2), reserved (1), priority1,
+        // clockClass, clockAccuracy, variance, priority2, grandmasterIdentity,
+        // stepsRemoved, timeSource, then the PATH_TRACE TLV.
+        assert_eq!(&announced[44..47], &[0, 0, 0]); // UTC offset + reserved
+        assert_eq!(announced[47], 128); // grandmasterPriority1
+        assert_eq!(&announced[48..53], &[248, 0xfe, 0xff, 0xff, 128]); // class, accuracy, variance, priority2
+        assert_eq!(&announced[53..61], &id.to_be_bytes()); // grandmasterIdentity
+        assert_eq!(&announced[61..64], &[0, 0, 0xa0]); // stepsRemoved, timeSource
+        assert_eq!(&announced[64..68], &[0, 8, 0, 8]); // TLV type and length
+        assert_eq!(&announced[68..], &id.to_be_bytes()); // clock in TLV
     }
 }

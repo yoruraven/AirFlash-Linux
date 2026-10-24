@@ -745,6 +745,12 @@ pub fn probe_with_controls(
     let mut next_metrics = start + Duration::from_secs(1);
     let mut last_marker = 0u64;
     let mut next_sync = start;
+    // A receiver only locks onto PTP once it can send delay requests back to
+    // our 319/320 sockets. On a NATed host (or any path that cannot accept
+    // inbound UDP) the session still connects, the receiver lights up, and the
+    // audio is silently discarded: nothing in the protocol reports the failure.
+    let mut ptp_clock_silent = false;
+    let mut next_ptp_check = start + Duration::from_secs(3);
     emit(
         json!({"event":"streaming","members":members.len(),"clock_id":clock_id,"first_send_unix_ns":clock.now_ns(),"first_send_qpc_ns":qpc_ns(),"requested_latency_ms":options.latency_ms,"sample_rate":rate,"measured_latency_ms":null,"qualified":false,"timing":options.timing}),
     );
@@ -781,6 +787,18 @@ pub fn probe_with_controls(
                 emit(
                     json!({"event":"warning","code":"sender_late_recovered","channel":"scheduler","host":null,"recovered":true,"skipped_packets":skipped,"message":"Sender discarded expired audio slots and recovered its timeline"}),
                 );
+            }
+            if now >= next_ptp_check {
+                let answered = ptp
+                    .as_ref()
+                    .is_none_or(|p| p.received.load(Ordering::Relaxed) > 0);
+                if !answered && !ptp_clock_silent {
+                    ptp_clock_silent = true;
+                    emit(
+                        json!({"event":"warning","code":"ptp_clock_unreachable","channel":"timing","host":null,"recovered":false,"message":"No PTP reply has arrived on ports 319/320, so the receiver cannot lock onto this clock and will stay silent. A receiver must be able to send UDP back to this host: check that this machine is on the same L2 network as the receiver (bridged, not NATed) and that no firewall drops inbound 319/320."}),
+                    );
+                }
+                next_ptp_check = now + Duration::from_secs(3);
             }
             if now >= next_sync {
                 for m in &mut members {

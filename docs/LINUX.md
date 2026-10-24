@@ -155,6 +155,21 @@ or, for the systemd unit, `AmbientCapabilities=CAP_NET_BIND_SERVICE` (see the
 commented lines in `packaging/linux/systemd/user/airflash-cli.service`).
 `--timing ntp` remains available for receivers that accept it.
 
+PTP is bidirectional: the receiver must be able to send UDP back to this host's
+ports 319/320. On a NATed machine (a Parallels/VMware guest, a container, or any
+host without a route back from the receiver) the session still connects, the
+receiver lights up, and every packet is discarded: nothing in the protocol
+reports the failure. The sender detects the silence after three seconds and emits
+
+```json
+{"event":"warning","code":"ptp_clock_unreachable","recovered":false, ...}
+```
+
+If you see that warning, put the sender on the same L2 network as the receiver
+(bridged networking, not NAT) and allow inbound UDP 319/320. `airflash-cli status`
+and `logs` show it too; treat it as "this host cannot play to that receiver",
+not as a volume or codec problem.
+
 ## Background operation
 
 `airflash-cli start --daemon` re-executes itself detached:
