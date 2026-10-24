@@ -8,10 +8,11 @@
     <Product>AirFlash</Product>
     <!-- Reflection bindings keep the ported ViewModels bindable by name, like the WPF originals. -->
     <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
-    <!-- desktop/Directory.Build.props targets win-x64 for the Windows release;
-         this project is the Linux slice and stays portable. -->
-    <RuntimeIdentifiers></RuntimeIdentifiers>
-    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <!-- desktop/Directory.Build.props targets win-x64 for the Windows release; this
+         project is the Linux slice. The plural form lists both Linux architectures
+         without pinning the build output to one of them, so referencing test projects
+         still discover and run their tests. -->
+    <RuntimeIdentifiers>linux-x64;linux-arm64</RuntimeIdentifiers>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
@@ -24,7 +25,11 @@
     <PackageReference Include="Avalonia" Version="11.3.11" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.11" />
     <PackageReference Include="Avalonia.Desktop" Version="11.3.11" />
-    <PackageReference Include="Avalonia.Diagnostics" Version="11.3.11" Condition="'$(Configuration)' == 'Debug'" />
+    <!-- Unconditional so Debug and Release share one dependency graph: a
+         Configuration-conditioned reference makes packages.lock.json drift on every
+         configuration switch and breaks locked-mode restores in CI. The dev-tools
+         package is trimmed out of the published AppImage. -->
+    <PackageReference Include="Avalonia.Diagnostics" Version="11.3.11" />
     <!-- Avalonia pulls in Tmds.DBus.Protocol 0.21.2 transitively, which carries
          GHSA-xrw6-gwf8-vvr9. Pin the patched release of the same minor line so the
          audit passes with warnings-as-errors, without jumping API versions. -->

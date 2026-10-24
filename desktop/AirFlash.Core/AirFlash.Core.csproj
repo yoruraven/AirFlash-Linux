@@ -2,6 +2,12 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
+    <!-- AirFlash.Core is the platform-neutral shared layer. desktop/Directory.Build.props
+         narrows the Windows release to win-x64, but inheriting that here makes a Linux
+         publish of AirFlash.UI fail with "does not support any target frameworks" and
+         rewrites packages.lock.json mid-build. Clearing the RID set keeps the project
+         restorable from both the Windows solution and the AppImage build. -->
+    <RuntimeIdentifiers>win-x64;linux-x64;linux-arm64</RuntimeIdentifiers>
   </PropertyGroup>
   <ItemGroup>
     <EmbeddedResource Include="Strings.zh.json" WithCulture="false" LogicalName="AirFlash.Core.Strings.zh.json"/>

@@ -23,7 +23,11 @@ SYSTEMD = REPO / "packaging" / "linux" / "systemd" / "user"
 CONFIG = REPO / "packaging" / "linux" / "config"
 LINUX_DOCS = REPO / "docs" / "LINUX.md"
 BUILD_SCRIPT = APPIMAGE / "build-appimage.sh"
-ARTIFACT_PATTERN = re.compile(r"^AirFlash-\d+\.\d+\.\d+(-[\w.]+)?-x86_64\.AppImage$")
+# The build accepts any dotted version (including test versions such as
+# 0.0.0.test) and an optional pre-release suffix before the architecture tag.
+ARTIFACT_PATTERN = re.compile(
+    r"^AirFlash-\d+\.\d+\.\d+[\w.]*(-[\w.]+)?-x86_64\.AppImage$"
+)
 
 
 def test_appdir_files_exist_with_executable_permissions():

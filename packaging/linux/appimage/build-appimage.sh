@@ -104,10 +104,20 @@ if [ "$VARIANT" = "full" ]; then
     GUI_PUBLISH="$BUILD_DIR/gui"
     rm -rf "$GUI_PUBLISH"
     # Release, self-contained, no debug symbols: the AppImage ships only what runs.
-    dotnet publish "$REPO_ROOT/desktop/AirFlash.UI/AirFlash.UI.csproj" \
-        -c Release -r "$DOTNET_RUNTIME" --self-contained true \
+    # Three details matter for repeatability:
+    #  -RuntimeIdentifier (property, not -r): -r narrows the shared project's
+    #    RuntimeIdentifiers and rewrites packages.lock.json.
+    #  -nodeReuse:false / UseSharedCompilation=false: a reused MSBuild node keeps a
+    #    stale evaluation of AirFlash.Core and then reports "does not support any
+    #    target frameworks".
+    #  env -u VERSION: VERSION is a reserved MSBuild property. This script exposes its
+    #    own VERSION as an environment variable, and leaving it inherited makes the
+    #    shared project's restore fail the same way.
+    env -u VERSION dotnet publish "$REPO_ROOT/desktop/AirFlash.UI/AirFlash.UI.csproj" \
+        -c Release -p:RuntimeIdentifier="$DOTNET_RUNTIME" --self-contained true \
         -p:PublishSingleFile=false -p:DeterministicBuild=true \
         -p:DebugType=none -p:DebugSymbols=false \
+        -nodeReuse:false -p:UseSharedCompilation=false \
         -o "$GUI_PUBLISH" >/dev/null || fail "dotnet publish failed"
     [ -x "$GUI_PUBLISH/AirFlash.UI" ] || fail "the published UI is missing"
 fi
