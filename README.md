@@ -9,10 +9,6 @@
   <img src="docs/images/airflash-en.png" alt="AirFlash English interface" width="550" />
 </p>
 
-<p align="center">
-  <img src="docs/images/airflash-linux-gnome.png" alt="AirFlash panel on Linux (GNOME)" width="550" />
-</p>
-
 AirFlash supports existing two-device stereo pairs and low-latency playback from Windows.
 Stream Windows desktop audio to HomePod through a native AirPlay 2 sender,
 with support for HomePod OS 27.
@@ -30,7 +26,28 @@ a SmartScreen warning because release binaries are not code-signed. Use
 **More info** and **Run anyway** only when the downloaded files are from a
 source you trust.
 
+On Linux, download the `-full` AppImage for your architecture (`x86_64` or
+`aarch64`) from the same release, make it executable, and run it:
+
+```bash
+chmod +x AirFlash-X.Y.Z-x86_64-full.AppImage
+./AirFlash-X.Y.Z-x86_64-full.AppImage    # opens the graphical panel
+```
+
+No installation or root access is needed: AppImage is a single self-contained
+file with the CLI, the engine and the .NET runtime inside. Running it with no
+arguments opens the panel, `gui` forces the panel, and any CLI command
+(`./AirFlash.AppImage discover`) drives the headless binary. To keep it on the
+desktop, move it to `~/Apps` and copy the bundled `airflash-ui.desktop` entry
+into `~/.local/share/applications/`. The AppImage is not code-signed; verify it
+against the release's `SHA256SUMS.txt`. See [docs/LINUX.md](docs/LINUX.md) for
+dependencies and known limitations.
+
 ## Linux preview
+
+<p align="center">
+  <img src="docs/images/airflash-linux-gnome.png" alt="AirFlash panel on Linux (GNOME)" width="420" />
+</p>
 
 Two ways to run AirFlash on Linux, both reusing the same native sender:
 

@@ -9,10 +9,6 @@
   <img src="images/airflash-zh-CN.png" alt="AirFlash 中文界面" width="550" />
 </p>
 
-<p align="center">
-  <img src="images/airflash-linux-gnome.png" alt="AirFlash 在 Linux（GNOME）上的界面" width="550" />
-</p>
-
 AirFlash 支持现有的双 HomePod 立体声组合和 Windows 低延迟播放。
 通过原生 AirPlay 2 发送端，将 Windows 桌面声音发送到 HomePod，支持 HomePod OS 27。
 
@@ -27,7 +23,26 @@ AirFlash 提供 Windows x64 可执行文件和可独立运行的 MSI 安装包�
 可能显示 SmartScreen 警告。只有在确认下载文件来源可信时，才使用“更多信息”
 和“仍要运行”。
 
+在 Linux 上，从同一个 release 下载对应架构（`x86_64` 或 `aarch64`）的 `-full`
+AppImage，赋予执行权限后直接运行：
+
+```bash
+chmod +x AirFlash-X.Y.Z-x86_64-full.AppImage
+./AirFlash-X.Y.Z-x86_64-full.AppImage    # 打开图形面板
+```
+
+AppImage 是单个自包含文件，内含命令行、引擎和 .NET 运行时，无需安装、也不需要
+root。不带参数运行会打开图形面板，`gui` 强制打开面板，任何命令行子命令
+（`./AirFlash.AppImage discover`）仍走无界面二进制。想放到桌面菜单里，可把文件移到
+`~/Apps`，并把镜像内的 `airflash-ui.desktop` 复制到 `~/.local/share/applications/`。
+AppImage 没有代码签名，请对照 release 中的 `SHA256SUMS.txt` 校验。依赖和已知限制
+见 [docs/LINUX.md](LINUX.md)。
+
 ## Linux（无界面预览）
+
+<p align="center">
+  <img src="images/airflash-linux-gnome.png" alt="AirFlash 在 Linux（GNOME）上的界面" width="420" />
+</p>
 
 Linux 提供两种形态，复用的是同一个原生 AirPlay 2 发送端：
 
