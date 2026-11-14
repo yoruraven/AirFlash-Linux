@@ -95,6 +95,9 @@ pub struct CaptureWarning {
     pub recovered: bool,
     pub message: String,
 }
+/// The session layer refers to capture warnings by this name on every
+/// platform (the Unix capture module calls its identical type `Warning`).
+pub type Warning = CaptureWarning;
 struct State {
     splice: crate::continuity::Splice,
     quantizer: crate::continuity::Quantizer,

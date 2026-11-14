@@ -322,7 +322,7 @@ fn get_port(value: &Value, key: &str) -> Result<u16> {
 
 #[cfg(windows)]
 fn qpc_ns() -> u64 {
-    qpc_ns()
+    crate::wasapi::qpc_ns()
 }
 
 #[cfg(not(windows))]
@@ -1437,6 +1437,9 @@ impl LiveSource for crate::source::StreamSource {
     fn metrics(&self) -> Json {
         serde_json::to_value(self.metrics()).unwrap_or(Json::Null)
     }
+    // On Unix every field is listed below; on Windows the struct update
+    // fills the additional fields of that platform's Metrics.
+    #[allow(clippy::needless_update)]
     fn metrics_struct(&self) -> crate::live::Metrics {
         let m = self.metrics();
         crate::live::Metrics {
@@ -1448,6 +1451,8 @@ impl LiveSource for crate::source::StreamSource {
             capture_to_send_p95_ms: m.capture_to_send_p95_ms,
             last_audio_qpc_ns: m.last_audio_qpc_ns,
             input_rate: m.input_rate,
+            // The Windows Metrics struct carries additional fields.
+            ..Default::default()
         }
     }
     fn last_audio(&self) -> u64 {
