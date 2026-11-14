@@ -1,4 +1,4 @@
-# <img src="desktop/AirFlash.App/Assets/app.svg" width="36" height="36" alt="" style="vertical-align:middle" /> AirFlash
+# <img src="desktop/AirFlash.App/Assets/app.svg" width="36" height="36" alt="AirFlash logo" style="vertical-align:middle" /> AirFlash Linux — Stream Linux Desktop Audio to HomePod over AirPlay 2
 
 <p align="center">
   <a href="README.md">English</a> ·
@@ -6,237 +6,249 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/airflash-en.png" alt="AirFlash English interface" width="550" />
+  <a href="https://github.com/yoruraven/AirFlash-Linux/releases/latest"><img src="https://img.shields.io/github/v/release/yoruraven/AirFlash-Linux" alt="Latest release of AirFlash Linux" /></a>
+  <img src="https://img.shields.io/badge/platform-Linux%20x86__64-blue" alt="Platform: Linux x86_64" />
+  <img src="https://img.shields.io/badge/AirPlay%202-sender-black" alt="AirPlay 2 sender for Linux" />
+  <img src="https://img.shields.io/badge/license-GPLv3%2B%20or%20Commercial-green" alt="License: GPLv3+ or commercial" />
 </p>
 
-AirFlash supports existing two-device stereo pairs and low-latency playback from Windows.
-Stream Windows desktop audio to HomePod through a native AirPlay 2 sender,
-with support for HomePod OS 27.
+<p align="center">
+  <img src="docs/images/airflash-linux-gnome.png" alt="AirFlash Linux graphical panel on GNOME streaming desktop audio to a HomePod over AirPlay 2" width="550" />
+</p>
 
-AirFlash is an AirPlay 2 alternative to TuneBlade (AirPlay 1), designed to bring
-Windows audio streaming to HomePods running newer versions of HomePod software.
+**AirFlash Linux is a native AirPlay 2 sender for Linux: it streams your Linux
+desktop audio — any app, system-wide — to a HomePod, a HomePod mini, or an
+existing HomePod stereo pair.** It is the Linux edition of
+[AirFlash](https://github.com/Ding-Kyoma/AirFlash), reusing the same native
+Rust AirPlay 2 engine as the Windows build, with a graphical panel, a headless
+CLI, and system-audio capture through PipeWire (with a PulseAudio fallback).
 
-## Installation
+If you are looking for a way to **use a HomePod as a speaker for your Linux
+PC**, a **TuneBlade or Airfoil alternative for Linux**, or an **AirPlay 2
+sender that is not a media server**, this is it: no library to import, no
+server to run — pick a receiver and your desktop sound plays on the HomePod.
 
-Download the latest release from [GitHub Releases](https://github.com/Ding-Kyoma/AirFlash/releases/latest), run
-`AirFlash-X.Y.Z.msi`, and launch AirFlash from the installed shortcut. Apps and Features provides repair and uninstall.
+> **Sender, not receiver.** AirFlash Linux *sends* audio from Linux to an
+> AirPlay 2 speaker. It is the opposite direction of Shairport Sync or UxPlay,
+> which turn a Linux machine into an AirPlay *receiver*.
 
-The minimum target is **Windows x64, Windows 10 1809 / build 17763** (LTSC 2019),
-including LTSC 2021, 22H2 and Windows 11. Windows 10 qualification is pending
-affected-user testing. See [Windows compatibility and startup diagnostics](docs/WINDOWS-COMPATIBILITY.md)
-for the candidate status and the PowerShell 5.1 diagnostic collector.
+## Quick start
 
-AirFlash is distributed as a Windows x64 executable and standalone MSI. Windows may show
-a SmartScreen warning because release binaries are not code-signed. Use
-**More info** and **Run anyway** only when the downloaded files are from a
-source you trust.
+1. Download the `-full` AppImage for your architecture from
+   [GitHub Releases](https://github.com/yoruraven/AirFlash-Linux/releases/latest):
 
-For audio capture, we recommend **Settings > Audio capture > Specific audio endpoint**.
-If you do not have an unused audio endpoint available, install a virtual endpoint
-with [Virtual Audio Cable (VAC Lite)](https://software.muzychenko.net/freeware/vac471lite.zip)
-or a similar tool, and route the audio you want to stream to that endpoint.
+   ```bash
+   chmod +x AirFlash-X.Y.Z-x86_64-full.AppImage
+   ./AirFlash-X.Y.Z-x86_64-full.AppImage   # opens the graphical panel
+   ```
 
-## Key features
+   No installation or root access is needed: the AppImage is a single
+   self-contained file with the panel, the CLI, the engine and the .NET
+   runtime inside. The AppImage is not code-signed; verify it against the
+   release's `SHA256SUMS.txt`.
 
-- Streams Windows system audio to HomePod over AirPlay 2.
-- Supports synchronized playback on existing two-device HomePod stereo pairs.
-- Adds experimental two-receiver software stereo groups, independent hardware volume,
-  per-receiver PCM/ALAC and UDP/TCP profiles, and 5 ms continuity transitions.
-- Offers automatic device discovery, PIN pairing, and manual device setup.
-- Lets you filter device discovery by selecting a network adapter in Settings.
-- Includes selectable latency modes, tray operation, mute restoration,
-  automatic reconnection, and connection diagnostics.
-- Provides a ten-band equalizer with presets and live preview in Settings.
-- Captures a selected application or playback/recording endpoints, including virtual audio devices.
-- Releases AirPlay sessions after configurable silence and reconnects when audio returns.
-- Available as a portable Windows x64 app with English, Simplified Chinese, Traditional Chinese, and German UI.
+2. Make sure the PC and the HomePod (running HomePod OS 26 or later) are on
+   the same local network, open AirFlash, and wait for the receiver list to
+   populate.
 
-## Feature plan
+3. Select the receiver (or the complete `HomePod stereo · 2/2` entry for a
+   stereo pair) and press play. In **Settings → Audio source**, choose system
+   audio to stream your desktop sound.
 
-See [audio continuity and schema v4](docs/audio-stereo-v3.md) for setup, protocol details,
-simulation results and remaining hardware acceptance. Samsung, Mac and mixed-brand
-playback and acoustic synchronization have not been qualified by this implementation.
+Prefer a terminal? The same AppImage drives the headless CLI — any CLI
+command runs the headless binary instead of the panel:
 
-- [ ] Dolby Atmos support.
+```bash
+./AirFlash-X.Y.Z-x86_64-full.AppImage discover
+./AirFlash-X.Y.Z-x86_64-full.AppImage start --device "HomePod" --source loopback
+```
 
-## Usage
+Or with a separately installed `airflash-cli`:
 
-1. Connect the PC and both HomePods to the same reachable local network.
-2. Start AirFlash and wait for the receiver list to populate.
-3. Select the complete `HomePod stereo · 2/2` entry and press play.
-4. Complete PIN pairing in **Settings > Receivers** if the receiver requests it.
-   If pairing fails with `pairing rejected (TLV error [2])`, open the Home app,
-   set speaker access to **Everyone**, and try again.
-5. Choose the capture endpoint and latency profile in Settings when the defaults
-   are not suitable.
+```bash
+airflash-cli discover                                   # find receivers (mDNS)
+airflash-cli pair --host <receiver-ip>                  # only if a PIN is requested
+airflash-cli start --host <receiver-ip> --source loopback --daemon
+airflash-cli status
+airflash-cli stop
+```
 
-Stream formats are configured in **Settings > Receivers** for each receiver:
-codec, sample rate, UDP/TCP transport, and clock strategy. Choices are filtered by
-the receiver's `/info` capabilities without starting playback or pairing. Automatic
-prefers a supported 44.1 kHz profile, then 48 kHz. Its label shows the expected
-selection before playback and the negotiated selection while playing; unapplied
-edits continue to show predictions. Offline or undetected receivers offer Automatic
-and retain existing explicit settings as pending verification. Native stereo pairs
-use their members' common capabilities. Software stereo groups control both members'
-common sample rate and default to 44.1 kHz.
+See [docs/LINUX.md](docs/LINUX.md) for dependencies, the systemd `--user`
+units, the full command reference and the PTP port setup described below.
 
-The control panel's **Global latency mode** changes the shared default. While the
-current connecting, playing, or standby receiver uses an independent latency mode,
-including either software stereo member, the control is disabled and points to
-**Settings > Receivers**. Stopping playback restores it; the global default remains
-editable in Settings.
+## Features
 
-New installations and reset settings default to **Normal · 200 ms**. The
-selectable modes are Real-time, Normal, Buffered, and Custom. Existing settings
-that used the retired adaptive mode load as Normal; other fixed modes and custom
-values are preserved.
+- **Native AirPlay 2 streaming** — the same Rust sender as the Windows build:
+  HAP pairing, PTP timing, encrypted RTP, PCM and ALAC (ALAC preferred, with
+  an automatic codec retry — HomePods reject PCM-only setups).
+- **Real desktop audio capture on Linux** — `--source loopback` captures the
+  default PipeWire sink monitor through explicitly linked monitor ports (the
+  microphone is never picked up by name matching); on PulseAudio-only hosts it
+  falls back to `parec`. `--monitor NAME` selects a different sink.
+- **HomePod and HomePod stereo pairs** — single receivers and existing
+  two-device stereo pairs, including per-receiver volume. Supports
+  **HomePod OS 26 and later** (AirPlay 2).
+- **Graphical panel and headless CLI** — an Avalonia panel sharing the Windows
+  build's core (receiver list, equalizer, diagnostics, settings), plus a
+  scriptable `airflash-cli` with daemon mode, JSON output and
+  `systemd --user` units.
+- **Latency controls** — Real-time (120 ms target), Normal (200 ms, default),
+  Buffered and Custom modes, with an optional forced fixed latency. Targets
+  are scheduling values, not measured end-to-end acoustic latency.
+- **Ten-band equalizer** with presets and live preview, automatic
+  reconnection, silence standby (release the session when quiet, resume when
+  audio returns), and detailed connection diagnostics.
+- **Self-contained AppImage** for Linux x86_64 — no .NET, Python or other
+  runtime to install. An aarch64 build is produced by the same script but is
+  not hardware-qualified yet.
+- English and Simplified Chinese UI.
 
-In **Settings > AirFlash streaming**, the 120/200/500 ms presets and 0–2000 ms
-custom target also offer an independent **Force fixed latency** switch. With it
-off, the existing recovery behavior remains. With it on, AirFlash does not
-automatically increase latency or move the playback timeline: short stalls may
-use brief silence and clear stale capture audio, while larger stalls reconnect
-at the same target within the configured retry limit.
+## Tested on real hardware
 
-Receiver settings can inherit the global policy, keep recovery, or force a fixed
-target. Forced software stereo requires every member to use the same forced
-target; conflicts are reported before playback without changing the group or its
-left/right synchronization offsets. Applying a target or policy change during
-playback rebuilds the session.
+Claims above are qualified on hardware, not only against simulated
+receivers. Summary (last updated November 2026):
 
-A forced target below the receiver's reported minimum shows a warning and is
-still attempted; the receiver may reject playback or remain silent. The control
-panel distinguishes the requested target, engine plan, and receiver minimum.
-These scheduling values are not measured end-to-end audio latency. Without
-forcing, the existing negotiation of receiver latency remains in effect.
-Latency mode and UDP/TCP transport are independent settings.
+| Environment | Receiver | Audio source | Result |
+| --- | --- | --- | --- |
+| Linux · x86_64 · PipeWire | HomePod mini | System audio (PipeWire monitor), WAV file, simulated signal | ✅ End-to-end playback (ALAC 44.1 kHz), clean receiver feedback |
+| Ubuntu 26.04 LTS · x86_64 · GNOME · PipeWire | HomePod stereo pair (full-size HomePods) | Simulated signal, system audio (desktop capture) | ✅ End-to-end playback, thousands of packets with zero send errors |
+| Ubuntu 26.04 LTS · x86_64 | Localhost / simulated receivers | Automated Rust, .NET and Python test suites | ✅ Passing |
+| aarch64 (build only) | — | — | ⚠️ Builds with the packaging script; not yet qualified on hardware |
 
-Stopping playback or cancelling a connection immediately shows **Disconnecting…**.
-The playback button becomes available again after the old session is cleaned up.
-AirFlash drains final engine output during shutdown and gives the engine a shared
-two-second stop budget before terminating an unresponsive engine process.
+Other glibc-based distributions should work — the runtime needs little more
+than glibc and PipeWire or PulseAudio — but only the environment above is
+hardware-tested. Reports from other distributions are very welcome.
 
-**Settings > General > Reset and restart** asks once before clearing all settings
-and receiver pairing. AirFlash stops playback and discovery, restores local mute,
-disables startup at login, deletes `config.json` and `native-credentials`, and restarts
-with defaults. Unsaved edits are discarded; logs and engine caches are retained.
-Schema v4 removes the global sample rate: v1–v3 inherited rates become Automatic,
-while explicit receiver and software group rates are preserved.
+## How it compares
 
-In **Settings > Audio capture**, **Specific audio endpoint** lists active playback
-and recording devices with their type. For Voicemeeter, select the recording
-endpoint corresponding to its B1/B2/B3 bus (for example, Voicemeeter Output)
-and enable that bus for the desired audio in Voicemeeter. Playback devices use
-loopback; recording devices capture their input directly. Automatic local mute
-applies only to playback devices and never mutes a recording input.
+| | AirFlash Linux | OwnTone | Shairport Sync | TuneBlade |
+| --- | --- | --- | --- | --- |
+| Direction | **Sender** (Linux → speaker) | Sender (media server) | Receiver (speaker → Linux) | Sender (Windows → speaker) |
+| Sends live desktop audio | ✅ Any app, system-wide | Via file/FIFO plumbing | — | ✅ |
+| AirPlay 2 to HomePod | ✅ Native | ✅ | Receives AirPlay 2 | ❌ AirPlay 1 only |
+| Graphical panel + CLI | ✅ Both | Web UI / API | ❌ | ✅ Windows only |
+| Runs on Linux | ✅ | ✅ | ✅ | ❌ |
 
-**Specific application** captures the selected application and its child processes;
-browsers include the complete process tree, not individual tabs. This native mode
-requires Windows build 20348 or later. Older Windows versions retain endpoint
-capture. The application selection is saved by executable path and follows a
-restart when exactly one matching instance is running. If several independent
-instances match, select an instance again. A missing application never falls back
-to system audio.
+## Usage notes
 
-To hear the target application only on HomePod while games and notifications stay
-on your headphones, install a virtual cable such as [VB-CABLE](https://vb-audio.com/Cable/)
-and use **Open Windows volume mixer** to route only that application's output to
-**CABLE Input**. Select the application, or use **Specific audio endpoint → CABLE
-Output · Recording**. Disable **Listen to this device** and any local monitoring.
-Application capture never mutes your entire playback device. The manual Windows
-routing remains after AirFlash stops; change it back when local playback is needed.
-Virtual routing cannot guarantee capture of DRM-protected content, and capture,
-resampling, and stream-format conversion do not guarantee bit-perfect output.
+- **Pairing.** Most receivers pair transparently; if a receiver requests a
+  PIN, pair once via the panel (**Settings → Receivers**) or
+  `airflash-cli pair`. If pairing fails with `pairing rejected (TLV error
+  [2])`, open the Home app, set speaker access to **Everyone**, and try again.
+- **PTP needs ports 319/320.** AirPlay 2 receivers such as HomePods require
+  PTP timing, and UDP 319/320 are privileged ports. Grant them once with
+  `sudo setcap cap_net_bind_service=+ep` on the binary, by lowering
+  `net.ipv4.ip_unprivileged_port_start`, or via the `AmbientCapabilities`
+  line in the shipped systemd unit. Without PTP the session connects but the
+  receiver rejects the audio stream. `--timing auto` (the default) warns
+  explicitly when it has to fall back.
+- **Same network, no NAT in between.** The receiver must be able to send UDP
+  back to this host; bridged networking works, NATed VM guests generally do
+  not. See [PTP startup troubleshooting](docs/PTP-TROUBLESHOOTING.md).
 
-Enable **AirFlash streaming → Standby** to release the complete AirPlay session
-after 5–300 seconds of silence (default duration: 10 seconds; disabled by default).
-Capture continues locally, and detected audio automatically starts a new session.
-Reconnection resumes current audio; its opening or short notification sounds may
-be missed. HomePod manages its own power state after the session is released.
+## Limitations
 
-Receiver discovery runs while the control panel or **Settings > Receivers** is
-visible, and remains active for software stereo topology changes during playback.
-Otherwise it pauses when both are hidden. Previous results remain available;
-pausing discovery does not interrupt playback. If automatic connection is enabled
-globally or for a receiver, AirFlash also discovers devices for ten seconds at
-startup. Open a receiver list to resume discovery afterwards.
+- Audio only: no screen mirroring or video, and no Dolby Atmos.
+- Per-application capture is currently a Windows feature; on Linux, capture
+  is the system-wide sink monitor (route an app to a dedicated sink if you
+  need it isolated).
+- Discovery uses a built-in minimal mDNS querier: no continuous browsing and
+  no IPv6 link-local answers.
+- The tray icon is not available on every desktop environment.
+- Capture, resampling and format conversion do not guarantee bit-perfect
+  output, and capture of DRM-protected content is not guaranteed.
+- AppImages are not code-signed; verify `SHA256SUMS.txt`.
 
-AirFlash intentionally uses fresh application storage under `%APPDATA%/AirFlash`
-and `%LOCALAPPDATA%/AirFlash`. It does not read configuration, credentials, or
-engine caches created by the previous product name; users must configure and pair
-again after installing AirFlash.
+## FAQ
 
-Use **Settings > About > Check for updates** to check for a stable release and open its download page. Checks run only when requested.
+**Can I use a HomePod as the speaker for my Linux PC?**
+Yes — that is exactly what AirFlash Linux does. It captures your desktop
+audio (PipeWire or PulseAudio) and streams it to a HomePod or HomePod mini
+over AirPlay 2.
 
-The real-time profile targets 120 ms; target and local transport timings are not measurements of end-to-end acoustic latency.
+**Does it work with a HomePod stereo pair?**
+Yes. Existing two-device stereo pairs appear as one `2/2` entry and play in
+sync. Experimental software stereo groups for two separate receivers are
+also in the shared engine; they are not yet hardware-qualified on Linux.
 
-For `PTP exchange did not become ready`, see [PTP startup troubleshooting](docs/PTP-TROUBLESHOOTING.md)
-for clock diagnostics and the correct engine process and UDP firewall rules.
+**Is this an AirPlay receiver for Linux?**
+No. Receivers (Shairport Sync, UxPlay) make Linux *appear as* a speaker.
+AirFlash Linux is a *sender*: Linux is the source, the HomePod is the
+speaker.
 
-See [Release workflow](docs/RELEASING.md) for version reservation and publishing.
+**Do I need PipeWire?**
+PipeWire is the primary path (any current distribution). On PulseAudio-only
+hosts, capture falls back to `parec`. Audio capture does not depend on your
+compositor, so it works the same under Wayland and X11 sessions.
 
-See [Icon maintenance](docs/ICONS.md) for the vector source, generated resources, and high-DPI verification.
+**How is this different from OwnTone?**
+OwnTone is a media server: it streams a music library you give it. AirFlash
+Linux captures the live output of your whole desktop — browser, player,
+calls, games — and sends it directly, with a desktop panel and a CLI, and no
+server to configure.
+
+**What latency should I expect?**
+The Real-time profile targets 120 ms of scheduling latency, which suits
+music and desktop use. End-to-end acoustic latency also depends on the
+receiver and the network and is not measured by the app, so competitive
+gaming is not the target use case.
 
 ## Stack
 
-- **C# / .NET 10 / WPF** for the Windows UI, tray integration, settings, and discovery
-- **Rust** for WASAPI capture, AirPlay 2 sessions, HAP, PTP, RTP, and audio transport
-- **Windows DNS-SD** for receiver discovery
-- **WASAPI loopback** for system audio capture
+- **Rust** — the native AirPlay 2 engine: system-audio capture on Linux
+  (PipeWire / PulseAudio monitor), AirPlay 2 sessions, HAP pairing, PTP,
+  RTP and audio transport
+- **C# / .NET 10** — shared `AirFlash.Core` (session control, settings,
+  receiver catalog, equalizer, localization)
+- **Avalonia** — the Linux graphical panel (`desktop/AirFlash.UI`); the
+  Windows build uses WPF on the same core
+- **Built-in mDNS querier** on Linux for receiver discovery (Avahi/Bonjour
+  not required)
 - **PCM and ALAC** with encrypted RTP for HomePod playback
-- **uv, pytest, and Ruff** for the finite validation tools and Python checks
 
-The published application is self-contained and statically links the native MSVC runtime. It does not require Python, a separately installed .NET runtime, or a separately installed VC++ Redistributable.
+## Build from source
 
-## Development and build
+Requirements: Rust stable 1.85+, .NET SDK 10.0+ (for the panel), and
+`pw-record` (PipeWire) or `parec` (PulseAudio) at runtime.
 
-Development requires Windows 10/11 x64, the .NET 10 SDK, the Rust MSVC toolchain,
-and Visual Studio C++/Windows SDK components. Python 3.12+ and `uv` are used for
-validation scripts only.
+```bash
+# Headless CLI + engine
+cargo build --release --features cli --manifest-path native/airflash-engine/Cargo.toml
 
-```powershell
-uv sync --locked
-pwsh scripts/build-native.ps1 -Check
-pwsh scripts/dotnet.ps1 restore AirFlash.sln --locked-mode
-pwsh scripts/dotnet.ps1 run --project AirFlash.App/AirFlash.App.csproj
-pwsh scripts/build-dev.ps1
+# Graphical panel
+dotnet build desktop/AirFlash.UI/AirFlash.UI.csproj
+
+# AppImage (backend, or VARIANT=full for the panel edition)
+packaging/linux/appimage/build-appimage.sh
 ```
 
-The development build produces:
+Tests:
 
-- `dist/dev/AirFlash.exe`
-- `dist/dev/AirFlash-X.Y.Z-dev.<commit>.msi`
-
-The development package is labeled from the latest stable `vX.Y.Z` tag and the
-current commit. It does not reserve a release version or push a tag. Uninstall an
-existing same-version AirFlash package before installing a development MSI.
-
-Use `pwsh scripts/build-release.ps1` only when performing a release; it requires a
-clean release branch, reserves the next numeric version, and writes `dist/`.
-
-Run the MSI directly. It installs the self-contained executable and provides optional desktop and Start menu shortcuts.
-AirFlash uses the Windows DNS-SD API and does not require Bonjour or install a background service.
-The Rust engine is embedded in the WPF executable and extracted to a content-addressed cache under `%LOCALAPPDATA%/AirFlash/engine/<hash>` at runtime.
-
-## Tests
-
-```powershell
-pwsh scripts/dotnet.ps1 test AirFlash.sln
+```bash
+cargo test --features cli --manifest-path native/airflash-engine/Cargo.toml
+dotnet test desktop/AirFlash.Tests/AirFlash.Tests.csproj
+dotnet test desktop/AirFlash.UI.Tests/AirFlash.UI.Tests.csproj
 uv run pytest
-uv run ruff check .
-pwsh scripts/build-native.ps1 -Check
 ```
 
-The ignored Rust soak test uses localhost UDP receivers only. Real HomePod tests
-are intentionally limited to the repository's low-volume, five-second procedure.
+Full Linux build, packaging and systemd details: [docs/LINUX.md](docs/LINUX.md).
 
-See [Discovery stability](docs/DISCOVERY-STABILITY.md) for the isolated playback
-retention regression check and repair validation notes.
+## Relationship to upstream
+
+AirFlash Linux is a fork of [Ding-Kyoma/AirFlash](https://github.com/Ding-Kyoma/AirFlash)
+(the Windows edition) and tracks upstream releases — the shared engine and
+core improvements flow in both directions where they are platform-neutral.
+This repository is where the Linux packaging, the Avalonia panel, the Linux
+capture path and Linux releases live. Windows installation and usage are
+documented in the upstream repository.
 
 ## Contributing
 
-Keep protocol behavior, pairing boundaries, and measurement limits explicit in
-changes. Pull requests are welcome!
+Pull requests are welcome — especially hardware reports from other
+distributions, desktop environments and receiver models. Please keep
+protocol behavior, pairing boundaries and measurement limits explicit in
+changes, and state clearly what was tested on real hardware versus simulated
+receivers.
 
 ## License
 
