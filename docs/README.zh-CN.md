@@ -13,6 +13,14 @@
 </p>
 
 <p align="center">
+  <img src="../desktop/AirFlash.UI/Assets/app.png" alt="AirFlash Linux 图标" width="128" />
+</p>
+
+<p align="center">
+  <img src="images/airflash-promo.jpg" alt="AirFlash 在 Linux 上把桌面声音投送到 HomePod 与 HomePod mini" width="560" />
+</p>
+
+<p align="center">
   <img src="images/airflash-linux-gnome.png" alt="AirFlash Linux 在 GNOME 上的图形面板：把 Linux 桌面声音通过 AirPlay 2 投送到 HomePod" width="340" />
 </p>
 

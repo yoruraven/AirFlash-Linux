@@ -13,6 +13,14 @@
 </p>
 
 <p align="center">
+  <img src="desktop/AirFlash.UI/Assets/app.png" alt="AirFlash Linux icon" width="128" />
+</p>
+
+<p align="center">
+  <img src="docs/images/airflash-promo.jpg" alt="AirFlash on Linux streaming desktop audio to a HomePod and a HomePod mini" width="560" />
+</p>
+
+<p align="center">
   <img src="docs/images/airflash-linux-gnome.png" alt="AirFlash Linux graphical panel on GNOME streaming desktop audio to a HomePod over AirPlay 2" width="340" />
 </p>
 
