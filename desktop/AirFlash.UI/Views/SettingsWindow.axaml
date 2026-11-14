@@ -158,7 +158,13 @@
             </Grid>
             <RadioButton Content="{loc:Text 'System audio'}" GroupName="Source"
                          IsChecked="{Binding Draft.StreamSource, Converter={StaticResource Equal}, ConverterParameter=loopback}" />
-            <TextBlock Text="{loc:Text 'Captures the default output device through the PipeWire sink monitor. Use --monitor NAME with the headless CLI to pick another sink.'}" Classes="HintText" Margin="26,0,0,0" />
+            <TextBlock Text="{loc:Text 'Captures the default output device through the PipeWire sink monitor, or a capture device below: a microphone, a USB input or a Bluetooth source is recorded directly.'}" Classes="HintText" Margin="26,0,0,10" />
+            <Grid Margin="26,0,0,0" IsEnabled="{Binding Draft.StreamSource, Converter={StaticResource Equal}, ConverterParameter=loopback}">
+              <StackPanel>
+                <TextBlock Text="{loc:Text 'Capture device'}" Classes="HintText" Margin="0,0,0,6" />
+                <ComboBox ItemsSource="{Binding CaptureDevices}" SelectedItem="{Binding SelectedCaptureDevice}" HorizontalAlignment="Stretch" />
+              </StackPanel>
+            </Grid>
           </StackPanel>
         </Border>
         <Border Classes="Card">

@@ -80,6 +80,25 @@ public sealed class SettingsViewModel : ObservableObject, IDisposable
         L.Get("Choose where AirPlay receivers are discovered"),
         L.Get("Linux audio, wirelessly to HomePod") }[Math.Clamp(SelectedPage, 0, Pages.Length - 1)];
     public ObservableCollection<DiscoveryAdapterOption> DiscoveryAdapters { get; } = [];
+    public ObservableCollection<CaptureDeviceOption> CaptureDevices { get; } = [];
+    private CaptureDeviceOption? _selectedCaptureDevice;
+    /// <summary>
+    /// The fork's capture-device picker (settings page 3): the default entry
+    /// keeps the historical default-sink monitor capture; any other entry is
+    /// a PipeWire node written to the draft as an explicit capture endpoint —
+    /// a sink is recorded through its monitor, a source (microphone, USB
+    /// input, Bluetooth source) is recorded directly by the engine.
+    /// </summary>
+    public CaptureDeviceOption? SelectedCaptureDevice
+    {
+        get => _selectedCaptureDevice;
+        set
+        {
+            if (!Set(ref _selectedCaptureDevice, value)) return;
+            if (value?.NodeName is { } name) { Draft.CaptureMode = "endpoint"; Draft.CaptureEndpoint = name; }
+            else { Draft.CaptureMode = "loopback"; Draft.CaptureEndpoint = null; }
+        }
+    }
     private string _networkStatus = "";
     public string NetworkStatus { get => _networkStatus; private set => Set(ref _networkStatus, value); }
     public RelayCommand RefreshAdaptersCommand { get; }
@@ -113,6 +132,21 @@ public sealed class SettingsViewModel : ObservableObject, IDisposable
             catch (Exception error) { ShowError(error); }
         });
         App = app; Draft = app.Settings.Clone(); _baseline = Draft.Clone();
+        CaptureDevices.Add(new CaptureDeviceOption(null, L.Get("Default (system output monitor)")));
+        foreach (var device in PipeWireDevices.List()) CaptureDevices.Add(device);
+        if (Draft.CaptureMode == "endpoint" && Draft.CaptureEndpoint is { } savedEndpoint)
+        {
+            _selectedCaptureDevice = CaptureDevices.FirstOrDefault(d => d.NodeName == savedEndpoint);
+            if (_selectedCaptureDevice is null)
+            {
+                // The saved device is not in the current graph (unplugged
+                // USB, Bluetooth off): keep it selectable so the draft is
+                // not silently rewritten.
+                _selectedCaptureDevice = new CaptureDeviceOption(savedEndpoint, savedEndpoint);
+                CaptureDevices.Add(_selectedCaptureDevice);
+            }
+        }
+        else _selectedCaptureDevice = CaptureDevices[0];
         Equalizer = new(Draft.Equalizer, EqualizerSampleRate, EqualizerChanged);
         App.Session.EqualizerFeedback += EqualizerFeedback;
         ApplyCommand = new(async () => { await ApplyAsync(); }, ShowError, CanApply);
