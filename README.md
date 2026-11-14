@@ -1,4 +1,4 @@
-# <img src="desktop/AirFlash.App/Assets/app.svg" width="36" height="36" alt="AirFlash logo" style="vertical-align:middle" /> AirFlash Linux — Stream Linux Desktop Audio to HomePod over AirPlay 2
+# <img src="desktop/AirFlash.UI/Assets/app.png" width="36" height="36" alt="AirFlash logo" style="vertical-align:middle" /> AirFlash Linux — Stream Linux Desktop Audio to HomePod over AirPlay 2
 
 <p align="center">
   <a href="README.md">English</a> ·
@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/airflash-linux-gnome.png" alt="AirFlash Linux graphical panel on GNOME streaming desktop audio to a HomePod over AirPlay 2" width="550" />
+  <img src="docs/images/airflash-linux-gnome.png" alt="AirFlash Linux graphical panel on GNOME streaming desktop audio to a HomePod over AirPlay 2" width="340" />
 </p>
 
 **AirFlash Linux is a native AirPlay 2 sender for Linux: it streams your Linux

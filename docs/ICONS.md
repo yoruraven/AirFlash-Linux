@@ -62,3 +62,13 @@ Physical acceptance on **3440×1440 at 125%**:
 5. Check the MSI's Apps and Features icon and installed shortcuts in a disposable Windows environment.
 
 Native handle tests and simulated DPI renders do not replace these physical checks. Existing pinned shortcuts may retain Windows' cached icon; recreate the pin if it still shows the old resource after an upgrade.
+
+## Fork note / 分叉说明 (AirFlash-Linux)
+
+The Linux build uses its own application icon: `desktop/AirFlash.UI/Assets/app.png`
+(the penguin mark), which is also the icon the Linux packages install. The SVG
+master pipeline described above still governs the Windows application's
+resources and is unchanged.
+
+Linux 构建使用独立的应用图标 `desktop/AirFlash.UI/Assets/app.png`（企鹅标志），
+Linux 安装包也使用该图标。上文的 SVG 母版流程仍只管 Windows 应用资源，未作改动。

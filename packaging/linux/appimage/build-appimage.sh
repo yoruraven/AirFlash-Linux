@@ -151,7 +151,7 @@ exec "$HERE/AirFlash.UI" "$@"
 LAUNCHER
     chmod 0755 "$GUI_LAUNCHER"
 fi
-install -m 0644 "$REPO_ROOT/desktop/AirFlash.App/Assets/app.png" \
+install -m 0644 "$REPO_ROOT/desktop/AirFlash.UI/Assets/app.png" \
     "$APPDIR/usr/share/icons/hicolor/512x512/apps/$ICON_NAME.png"
 # appimagetool resolves the Icon key from the AppDir root; .DirIcon follows.
 cp "$APPDIR/usr/share/icons/hicolor/512x512/apps/$ICON_NAME.png" "$APPDIR/$ICON_NAME.png"

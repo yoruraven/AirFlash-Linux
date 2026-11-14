@@ -1,4 +1,4 @@
-# <img src="../desktop/AirFlash.App/Assets/app.svg" width="36" height="36" alt="AirFlash 标志" style="vertical-align:middle" /> AirFlash Linux — 把 Linux 桌面声音投到 HomePod（AirPlay 2）
+# <img src="../desktop/AirFlash.UI/Assets/app.png" width="36" height="36" alt="AirFlash 标志" style="vertical-align:middle" /> AirFlash Linux — 把 Linux 桌面声音投到 HomePod（AirPlay 2）
 
 <p align="center">
   <a href="../README.md">English</a> ·
@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <img src="images/airflash-linux-gnome.png" alt="AirFlash Linux 在 GNOME 上的图形面板：把 Linux 桌面声音通过 AirPlay 2 投送到 HomePod" width="550" />
+  <img src="images/airflash-linux-gnome.png" alt="AirFlash Linux 在 GNOME 上的图形面板：把 Linux 桌面声音通过 AirPlay 2 投送到 HomePod" width="340" />
 </p>
 
 **AirFlash Linux 是一款原生 AirPlay 2 发送工具，可以把 Linux 桌面上的全部声音发送到 HomePod、HomePod mini 或已有的 HomePod 立体声组合。** 它是 [AirFlash](https://github.com/Ding-Kyoma/AirFlash) 的 Linux 版本，与 Windows 版共用同一套原生 Rust AirPlay 2 引擎，既有图形面板，也有无头 CLI。系统声音通过 PipeWire 采集；如果机器上只有 PulseAudio，则会回退到 `parec`。
