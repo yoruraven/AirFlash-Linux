@@ -1,77 +1,53 @@
-# AirFlash 0.4.1 · Linux preview
+# AirFlash 0.6.3 · Linux
 
-Linux x86_64 · English and Simplified Chinese · AirPlay 2 sender
+Linux x86_64 and arm64 (aarch64) · English and Simplified Chinese · AirPlay 2 sender
 
-> **Preview.** 0.4.1 closes the two gaps that kept 0.4.0 quiet on real
-> hardware: Linux now captures system audio, and the sender negotiates what
-> HomePods actually require (ALAC-first with codec fallback, PTP timing with
-> an explicit fallback warning). Qualified end to end against a HomePod mini.
+This is the first Linux release built on the merged upstream 0.6.3 codebase.
+It streams Linux desktop audio (PipeWire system capture, with a PulseAudio
+fallback) to an AirPlay 2 receiver or an existing HomePod stereo pair.
+Receivers need HomePod OS 26 or later (AirPlay 2).
 
 ## What is in this release
 
-Two artifacts, both Linux x86_64 AppImages built by
+Every asset is built for both **x86_64** and **arm64/aarch64** by the
+`Linux Release` GitHub Actions workflow, using
 `packaging/linux/appimage/build-appimage.sh`:
 
 | Asset | Variant | Contains |
 | --- | --- | --- |
-| `AirFlash-0.4.1-x86_64.AppImage` | `backend` | `airflash-cli` + the JSONL `airflash-engine` |
-| `AirFlash-0.4.1-x86_64-full.AppImage` | `full` | the above plus the Avalonia panel (`Terminal=false` desktop entry) |
+| `AirFlash-0.6.3-<arch>.AppImage` | `backend` | `airflash-cli` + the JSONL `airflash-engine` (headless) |
+| `AirFlash-0.6.3-<arch>-full.AppImage` | `full` | the above plus the Avalonia control panel |
+| `AirFlash-0.6.3-<arch>.tar.gz` | portable tree | the full AppDir as plain files (see the PTP note) |
+| `SHA256SUMS.txt` | — | checksums for every asset above |
 
-In the full image, running the AppImage with no arguments opens the panel;
-`AirFlash.AppImage discover` (or any CLI command) still drives the headless binary.
+## Timing note: PTP and the AppImage
 
-## New in 0.4.1
+AirPlay 2 group playback prefers PTP timing, which needs to bind UDP
+319/320 — privileged ports on Linux. File capabilities cannot survive an
+AppImage mount, so inside an AppImage the engine detects the missing
+permission and falls back to NTP timing automatically (with a warning in
+the log) instead of failing the stream. For true PTP sync, use the
+portable tarball (or a plain directory install) and grant the engine
+binary the capability once:
 
-- **System audio capture on Linux** (`--source loopback`, the default):
-  captures the default PipeWire sink monitor through explicitly linked monitor
-  ports (the microphone can never be picked by fuzzy matching), with a
-  `parec` fallback for PulseAudio-only hosts and a clear error when neither
-  helper exists. `--monitor NAME` selects another sink by node name, id or
-  description. Native 48 kHz capture is resampled to the streaming rate with
-  queue-level drift correction, mirroring the WASAPI loopback.
-- **HomePod playback fix**: the sender prefers ALAC (which HomePods require —
-  they answer the audio SETUP with `400 Bad Request` for PCM) and retries once
-  with the other codec when the audio SETUP is rejected. `--codec alac|pcm|auto`
-  overrides the choice; `--device NAME` now picks up the receiver-advertised
-  codecs and no longer counts the `_airplay`/`_raop` twins as ambiguous.
-- **PTP timing that degrades honestly**: `--timing auto` (now the default)
-  uses PTP when ports 319/320 can be bound and falls back to NTP with a
-  `timing_fallback` warning otherwise. HomePods need PTP; grant the ports with
-  `sudo setcap cap_net_bind_service=+ep` on the binary,
-  `sysctl net.ipv4.ip_unprivileged_port_start=319`, or the documented
-  `AmbientCapabilities` line in the systemd unit.
-- **Panel**: system audio is a first-class source on Linux again, and a
-  dispatcher deadlock that left the receiver list stuck on “Searching for
-  receivers” is fixed (with a regression test).
+```sh
+sudo setcap cap_net_bind_service=+ep /path/to/airflash-engine
+```
 
-## Verification
+## Since the 0.4.x Linux previews
 
-Qualified on hardware, not just against the simulated receiver: a HomePod mini
-(`AudioAccessory5,1`) streamed the PipeWire monitor while a tone played
-locally, plus a WAV file and the simulated signal — ALAC 44100, receiver
-volume set to 10% and confirmed by readback, audio-onset markers on real
-captured audio, thousands of packets with zero send errors and clean `feedback`
-every 2 s. The Rust suite (fake-helper capture tests for PipeWire, Pulse
-fallback, graph parsing and missing-helper guidance, plus an auto-defaults
-localhost session), the .NET suites and the packaging checks all pass.
+- Merged the upstream 0.6.3 engine and core (adaptive latency, receiver
+  ownership/preemption handling, standby on silence, group timing plans).
+- Linux live sources (system capture, WAV file, simulated) work through
+  the new session supervisor; the settings window switches pages
+  correctly, error text is selectable/copyable, and `--tray` autostart
+  stays in the tray.
+- The update checker and download links now point at this repository
+  (yoruraven/AirFlash-Linux).
 
-## Known limitations
+## Credits
 
-- PTP timing needs privileged ports 319/320 (see above); without them HomePods
-  reject the audio stream even though the session connects.
-- No tray icon on every desktop environment; the window closing hides to the tray
-  where the platform provides one.
-- Discovery is a query, not continuous browsing; no IPv6 link-local answers.
-- On virtual machines without a real audio clock the PipeWire graph can run
-  faster than wall-clock time; the sender drops the excess to bound latency
-  (visible as `dropped_frames`). This does not happen on hardware clocks.
-- The AppImages are not code-signed; verify `SHA256SUMS.txt` out of band.
+Linux port by YoruRaven. Based on the original
+[AirFlash](https://github.com/Ding-Kyoma/AirFlash) by Ding-Kyoma.
 
-## Upgrade notes
-
-Nothing on Windows changes. The Windows MSI and executable continue to be built
-by the existing Windows release workflow. The example systemd config now uses
-`"source": "loopback"` and `"timing": "auto"`; the unit file documents the
-optional PTP capability lines.
-
-Full details: <https://github.com/HaochenH/AirFlash/blob/main/docs/LINUX.md>
+License: GPLv3 or later, or commercial license · .NET / Avalonia / Rust

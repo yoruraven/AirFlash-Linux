@@ -12,7 +12,7 @@ public static class AppPaths
 {
     public const string Name = "AirFlash";
     public static string Version => typeof(AppPaths).Assembly.GetName().Version!.ToString(3);
-    public static string VersionLabel => $"AirFlash {Version}{(IsPreview ? " · Preview" : "")} · Avalonia/Linux";
+    public static string VersionLabel => $"AirFlash {Version}{(IsPreview ? " · Preview" : "")}";
     public static bool IsPreview => typeof(AppPaths).Assembly
         .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()?
         .InformationalVersion.Contains("-rc.", StringComparison.OrdinalIgnoreCase) == true;

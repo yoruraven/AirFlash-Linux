@@ -7,8 +7,8 @@ public sealed record ReleaseUpdate(Version Version, Uri DownloadPage);
 
 public sealed class UpdateService(HttpClient client)
 {
-    public const string RepositoryUrl = "https://github.com/Ding-Kyoma/AirFlash";
-    public const string LatestApi = "https://api.github.com/repos/Ding-Kyoma/AirFlash/releases/latest";
+    public const string RepositoryUrl = "https://github.com/yoruraven/AirFlash-Linux";
+    public const string LatestApi = "https://api.github.com/repos/yoruraven/AirFlash-Linux/releases/latest";
     public async Task<ReleaseUpdate?> CheckAsync(CancellationToken cancellationToken = default)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);

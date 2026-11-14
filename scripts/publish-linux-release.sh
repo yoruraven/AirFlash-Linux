@@ -49,7 +49,7 @@ if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
 fi
 
 gh release create "$TAG" "${ARTIFACTS[@]}" \
-    --repo HaochenH/AirFlash \
+    --repo yoruraven/AirFlash-Linux \
     --title "AirFlash $VERSION · Linux preview" \
     --notes-file docs/LINUX-RELEASE-NOTES.md \
     --latest

@@ -1,0 +1,125 @@
+name: Linux Release
+
+# Builds the Linux release assets (AppImages + portable tarballs) for both
+# x86_64 and arm64 on native runners and publishes them to the GitHub release
+# for the pushed tag. Manual dispatches only build and upload artifacts.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (X.Y.Z, without the v prefix)'
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: airflash-linux-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            rid: linux-x64
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            rid: linux-arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            V="${{ inputs.version }}"
+          else
+            V="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y squashfs-tools file
+
+      - name: Build AppImages (backend and full)
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TARGET: ${{ matrix.target }}
+          ARCH: ${{ matrix.arch }}
+          DOTNET_RUNTIME: ${{ matrix.rid }}
+        run: |
+          packaging/linux/appimage/build-appimage.sh
+          VARIANT=full packaging/linux/appimage/build-appimage.sh
+
+      - name: Portable tarball of the full AppDir
+        # The extracted tree keeps real files, so users can grant the engine
+        # CAP_NET_BIND_SERVICE for true PTP timing (impossible inside an
+        # AppImage mount, where the engine falls back to NTP automatically).
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          tar -czf "dist/AppImage/AirFlash-$VERSION-$ARCH.tar.gz" \
+            -C build/appimage AirFlash.AppDir
+          ls -la dist/AppImage/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: airflash-linux-${{ matrix.arch }}
+          path: |
+            dist/AppImage/AirFlash-*.AppImage
+            dist/AppImage/AirFlash-*.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+
+      - name: Combined checksums
+        run: |
+          cd assets
+          sha256sum AirFlash-*.AppImage AirFlash-*.tar.gz > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: AirFlash ${{ github.ref_name }} · Linux
+          body_path: docs/LINUX-RELEASE-NOTES.md
+          files: |
+            assets/AirFlash-*.AppImage
+            assets/AirFlash-*.tar.gz
+            assets/SHA256SUMS.txt

@@ -22,6 +22,7 @@ public sealed class SettingsViewModel : ObservableObject, IDisposable
     public UpdateCheckState Updates { get; } = new(new UpdateService(UpdateClient), Version.Parse(Services.AppPaths.Version));
     public AsyncCommand CheckUpdatesCommand { get; }
     public RelayCommand OpenDownloadCommand { get; }
+    public RelayCommand OpenRepositoryCommand { get; }
     public AppViewModel App { get; }
     public AppSettings Draft { get; }
 
@@ -104,6 +105,11 @@ public sealed class SettingsViewModel : ObservableObject, IDisposable
                 if (Updates.DownloadPage is { } url)
                     System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url.AbsoluteUri) { UseShellExecute = true });
             }
+            catch (Exception error) { ShowError(error); }
+        });
+        OpenRepositoryCommand = new(() =>
+        {
+            try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(UpdateService.RepositoryUrl) { UseShellExecute = true }); }
             catch (Exception error) { ShowError(error); }
         });
         App = app; Draft = app.Settings.Clone(); _baseline = Draft.Clone();

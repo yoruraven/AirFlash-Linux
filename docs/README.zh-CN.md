@@ -7,7 +7,7 @@
 
 <p align="center">
   <a href="https://github.com/yoruraven/AirFlash-Linux/releases/latest"><img src="https://img.shields.io/github/v/release/yoruraven/AirFlash-Linux" alt="AirFlash Linux 最新版本" /></a>
-  <img src="https://img.shields.io/badge/platform-Linux%20x86__64-blue" alt="平台：Linux x86_64" />
+  <img src="https://img.shields.io/badge/platform-Linux%20x86__64%20%7C%20arm64-blue" alt="平台：Linux x86_64 与 arm64" />
   <img src="https://img.shields.io/badge/AirPlay%202-sender-black" alt="Linux 上的 AirPlay 2 发送端" />
   <img src="https://img.shields.io/badge/license-GPLv3%2B%20or%20Commercial-green" alt="许可证：GPLv3+ 或商业授权" />
 </p>
@@ -16,43 +16,34 @@
   <img src="images/airflash-linux-gnome.png" alt="AirFlash Linux 在 GNOME 上的图形面板：把 Linux 桌面声音通过 AirPlay 2 投送到 HomePod" width="550" />
 </p>
 
-**AirFlash Linux 是一个原生 AirPlay 2 发送端：它把 Linux 桌面声音——任何
-应用、全系统——投送到 HomePod、HomePod mini，或已有的 HomePod 立体声组合。**
-它是 [AirFlash](https://github.com/Ding-Kyoma/AirFlash) 的 Linux 版，与
-Windows 版共用同一套原生 Rust AirPlay 2 引擎，提供图形面板和无头 CLI，
-系统声音采集走 PipeWire（PulseAudio 可回退）。
+**AirFlash Linux 是一款原生 AirPlay 2 发送工具，可以把 Linux 桌面上的全部声音发送到 HomePod、HomePod mini 或已有的 HomePod 立体声组合。** 它是 [AirFlash](https://github.com/Ding-Kyoma/AirFlash) 的 Linux 版本，与 Windows 版共用同一套原生 Rust AirPlay 2 引擎，既有图形面板，也有无头 CLI。系统声音通过 PipeWire 采集；如果机器上只有 PulseAudio，则会回退到 `parec`。
 
-如果你在找的是「**让 HomePod 当 Linux 电脑的音箱**」「**Linux 上的
-TuneBlade / Airfoil 替代品**」或者「**不用搭媒体服务器的 AirPlay 2
-发送端**」，就是它：不用导入曲库、不用跑服务器，选好接收端，桌面声音
-就在 HomePod 上响。
+想让 HomePod 给 Linux 电脑当音箱，或者在 Linux 上找 TuneBlade、Airfoil 的替代方案，可以试试它。它不是媒体服务器，不用先导入曲库：打开面板，选好接收端，桌面声音就能在 HomePod 上播放。
 
-> **它是发送端，不是接收端。** AirFlash Linux 把声音从 Linux *发* 到
-> AirPlay 2 音箱；Shairport Sync、UxPlay 是反过来的方向，它们把 Linux
-> 变成 AirPlay *接收端*。
+> **注意：它是发送端，不是接收端。** AirFlash Linux 负责把声音从 Linux 发到 AirPlay 2 音箱。Shairport Sync、UxPlay 做的是相反的事：它们让 Linux 变成 AirPlay 接收端。
 
 ## 快速开始
 
 1. 从 [GitHub Releases](https://github.com/yoruraven/AirFlash-Linux/releases/latest)
-   下载对应架构的 `-full` AppImage：
+   下载适合当前架构的 `-full` AppImage：
 
    ```bash
    chmod +x AirFlash-X.Y.Z-x86_64-full.AppImage
    ./AirFlash-X.Y.Z-x86_64-full.AppImage   # 打开图形面板
    ```
 
-   无需安装、无需 root：AppImage 是单个自包含文件，面板、CLI、引擎和
-   .NET 运行时都在里面。AppImage 没有代码签名，请用发布附带的
-   `SHA256SUMS.txt` 核对文件。
+   不用安装，也不需要 root。AppImage 是自包含的单文件，面板、CLI、引擎和
+   .NET 运行时都打包在里面。文件没有代码签名，下载后请用 Release 附带的
+   `SHA256SUMS.txt` 校验完整性。
 
-2. 确认电脑和 HomePod（系统版本为 HomePod OS 26 或以上）在同一局域网，
-   打开 AirFlash，等接收端列表出现。
+2. 让电脑和 HomePod 连到同一个局域网，打开 AirFlash，等接收端出现在列表里。
 
-3. 选择接收端（立体声组合选完整的 `HomePod stereo · 2/2` 一项）并点
-   播放；在 **设置 → 音频来源** 里选系统声音，即可投送桌面声音。
+3. 选好接收端后点播放。立体声组合要选择完整的
+   `HomePod stereo · 2/2` 条目；想播放桌面声音，还要在
+   **设置 → 音频来源** 中选择系统声音。
 
-习惯用终端也可以：同一个 AppImage 带无头 CLI，传任何 CLI 命令时运行的
-就是无头程序而不是面板：
+也可以直接用终端：同一个 AppImage 内置了无头 CLI，带参数运行时启动的是
+CLI，而不是图形面板：
 
 ```bash
 ./AirFlash-X.Y.Z-x86_64-full.AppImage discover
@@ -69,37 +60,39 @@ airflash-cli status
 airflash-cli stop
 ```
 
-依赖、systemd `--user` 服务、完整命令参考和下文提到的 PTP 端口设置，
-见 [LINUX.md](LINUX.md)（英文）。
+依赖项、systemd `--user` 服务、完整命令说明，以及后文提到的 PTP 端口
+设置，见 [LINUX.md](LINUX.md)（英文）。
 
 ## 主要功能
 
-- **原生 AirPlay 2 发送**——与 Windows 版共用同一套 Rust 引擎：HAP 配对、
-  PTP 时钟、加密 RTP、PCM 与 ALAC（优先 ALAC，被拒时自动换编码重试；
-  HomePod 会拒绝只用 PCM 的建立方式）。
-- **Linux 桌面声音真采集**——`--source loopback` 通过显式连接的 monitor
-  端口采集默认 PipeWire 输出的监听流（不会靠名字模糊匹配误抓麦克风）；
-  只有 PulseAudio 的机器回退到 `parec`。`--monitor NAME` 可换另一个
-  输出设备。
-- **支持 HomePod 与立体声组合**——单个接收端和已有的双 HomePod 立体声
-  组合，每台设备可单独调音量；**支持 HomePod OS 26 及以上版本**
-  （AirPlay 2）。
-- **图形面板 + 无头 CLI**——Avalonia 面板与 Windows 版共用核心（接收端
-  列表、均衡器、诊断、设置），另有可脚本化的 `airflash-cli`：守护进程
-  模式、JSON 输出、 `systemd --user` 服务文件。
-- **延迟可控**——实时（目标 120 ms）、正常（200 ms，默认）、缓冲和自定义
-  模式，可选强制固定延迟。注意这些是调度目标值，不是实测的端到端声学
-  延迟。
-- **10 段均衡器**（预设 + 即时试听）、自动重连、静音待机（安静时释放
-  会话、有声音时自动恢复）、详细的连接诊断。
-- **自包含 AppImage**（Linux x86_64）——不用另装 .NET、Python 或其他
-  运行时。aarch64 可用同一脚本构建，但尚未做实机验收。
+- **原生 AirPlay 2**——使用与 Windows 版相同的 Rust 引擎，支持 HAP
+  配对、PTP 时钟和加密 RTP。音频编码支持 PCM 和 ALAC，并优先使用
+  ALAC；如果接收端拒绝当前编码，会自动换一种重试。只用 PCM 无法在
+  HomePod 上建立播放。
+- **真正采集桌面声音**——`--source loopback` 通过明确连接的 monitor
+  端口采集默认 PipeWire 输出，不靠名称猜测，也不会误抓麦克风；只有
+  PulseAudio 时会回退到 `parec`。需要采集其他输出设备时，可用
+  `--monitor NAME` 指定。
+- **已适配 HomePod OS 26**——支持苹果最新的 HomePod 系统。单个
+  HomePod 和现有的双机立体声组合都能使用，每台设备的音量也可以分别
+  调节。
+- **图形面板和无头 CLI 都有**——Avalonia 面板与 Windows 版共用核心
+  代码，提供接收端列表、均衡器、诊断和设置；`airflash-cli` 更适合脚本
+  和自动化，支持守护进程模式、JSON 输出和 `systemd --user` 服务。
+- **延迟可以调节**——提供实时（目标 120 ms）、正常（200 ms，默认）、
+  缓冲和自定义模式，也可以锁定固定延迟。这里的数值是调度目标，不等同
+  于实际测得的端到端声学延迟。
+- **10 段均衡器**——带预设并可即时试听；还支持自动重连和静音待机：
+  没有声音时释放会话，再次出声时自动恢复。连接问题也可以通过详细的
+  诊断信息排查。
+- **自包含 AppImage**——x86_64 和 arm64 两种架构都有，不用另外安装
+  .NET、Python 或其他运行时。arm64 版目前还没有经过实机验收。
 - 界面支持英文和简体中文。
 
 ## 实测矩阵
 
-以下结论都在真实硬件上验证过，不只是对模拟接收端跑通。汇总（最近更新：
-2026 年 11 月）：
+下面这些结果都来自真实硬件测试，不只是用模拟接收端跑通流程。
+最后更新：2026 年 11 月。
 
 | 环境 | 接收端 | 声音来源 | 结果 |
 | --- | --- | --- | --- |
@@ -108,9 +101,9 @@ airflash-cli stop
 | Ubuntu 26.04 LTS · x86_64 | 本机 / 模拟接收端 | Rust、.NET、Python 自动化测试套件 | ✅ 全部通过 |
 | aarch64（仅构建） | — | — | ⚠️ 打包脚本可构建，尚未实机验收 |
 
-其他基于 glibc 的发行版理论上都能跑——运行时只需要 glibc 和 PipeWire
-或 PulseAudio——但目前只有上表环境做过实机验证。非常欢迎其他发行版的
-实测报告。
+其他基于 glibc 的发行版理论上也能运行，运行时主要需要 glibc，以及
+PipeWire 或 PulseAudio；不过目前只有表中环境经过实机验证。也欢迎补充
+其他发行版的实测结果。
 
 ## 和同类方案的区别
 
@@ -124,60 +117,64 @@ airflash-cli stop
 
 ## 使用说明
 
-- **配对。** 多数接收端可直接透明配对；设备要求 PIN 时，在面板
-  （**设置 → 接收器**）或用 `airflash-cli pair` 配对一次即可。如果出现
-  `pairing rejected (TLV error [2])`，请在「家庭」App 里把扬声器访问
-  权限设为「所有人」后重试。
-- **PTP 需要 319/320 端口。** HomePod 等 AirPlay 2 接收端要求 PTP 时钟，
-  而 UDP 319/320 是特权端口：给二进制加一次
+- **配对。** 大多数接收端可以直接配对。如果接收端要求 PIN，在面板
+  （**设置 → 接收器**）里或用 `airflash-cli pair` 配对一次即可。如果
+  出现 `pairing rejected (TLV error [2])`，请打开「家庭」App，把扬声器
+  访问权限设为「所有人」后重试。
+- **PTP 使用 319/320 端口。** PTP 更适合需要精确同步的 AirPlay 2
+  播放，但 UDP 319/320 属于特权端口。如果端口无法绑定，引擎会给出
+  警告并自动回退到 NTP，不会直接让播放失败。想要完整的 PTP 同步，
+  可以任选一种方式授权：给二进制执行
   `sudo setcap cap_net_bind_service=+ep`、调低
-  `net.ipv4.ip_unprivileged_port_start`、或用随附 systemd 服务里的
-  `AmbientCapabilities` 行，三选一即可。没有 PTP 时会话能连上、但接收端
-  会拒绝音频流。`--timing auto`（默认）被迫回退时会明确告警。
-- **同一网络、中间不要有 NAT。** 接收端要能用 UDP 回连本机；桥接网络
-  可以，NAT 模式的虚拟机一般不行。见
+  `net.ipv4.ip_unprivileged_port_start`，或使用随附 systemd 服务中的
+  `AmbientCapabilities` 配置。
+- **要在同一网络，中间不要经过 NAT。** 接收端需要能通过 UDP 回连
+  这台电脑。桥接网络通常没问题，NAT 模式的虚拟机一般不行。详见
   [PTP 启动排障](PTP-TROUBLESHOOTING.md)（英文）。
 
 ## 已知限制
 
-- 只做音频：不支持屏幕镜像/视频，不支持杜比 Atmos。
-- 按应用采集目前是 Windows 版功能；Linux 上采集的是全系统输出监听流
-  （需要隔离某个应用时，可先把它的输出路由到独立的输出设备再选
-  `--monitor`）。
-- 发现功能用的是内置的精简 mDNS 查询器：不支持持续浏览，不回答
-  IPv6 link-local。
-- 托盘图标不是在所有桌面环境上都有。
-- 采集、重采样和格式转换不保证逐位无损，也不保证能采集受 DRM 保护的
-  内容。
+- 只支持音频，不支持屏幕镜像、视频或杜比 Atmos。
+- 按应用单独采集目前只有 Windows 版支持。Linux 版采集整个系统的
+  输出；如果只想采集某个应用，可以先把它的声音路由到单独的输出设备，
+  再用 `--monitor` 选择。
+- 设备发现使用内置的精简版 mDNS 查询器，不支持持续浏览，也不会回应
+  IPv6 link-local 查询。
+- 部分桌面环境下没有托盘图标。
+- 采集、重采样和格式转换不保证逐位无损，也不保证能采到受 DRM
+  保护的内容。
 - AppImage 没有代码签名，请核对 `SHA256SUMS.txt`。
 
 ## 常见问题
 
 **能让 HomePod 当 Linux 电脑的音箱吗？**
-可以，这正是 AirFlash Linux 的用途：它采集桌面声音（PipeWire 或
-PulseAudio），通过 AirPlay 2 投到 HomePod 或 HomePod mini。
+可以，这正是 AirFlash Linux 的主要用途。它会采集桌面声音（PipeWire
+或 PulseAudio），再通过 AirPlay 2 发送到 HomePod 或 HomePod mini。
 
 **支持 HomePod 立体声组合吗？**
-支持。已有的双设备立体声组合会显示为一个 `2/2` 条目，同步播放。
-共享引擎里还有实验性的双接收端软件立体声，Linux 上尚未做实机验收。
+支持。已经组好的双 HomePod 立体声组合会显示为一个 `2/2` 条目，并
+保持同步播放。共享引擎还带实验性的双接收端软件立体声功能，但 Linux
+版还没有实机验证。
 
 **它是 Linux 上的 AirPlay 接收端吗？**
-不是。接收端（Shairport Sync、UxPlay）是把 Linux *变成* 一个音箱；
-AirFlash Linux 是 *发送端*：Linux 是声源，HomePod 才是音箱。
+不是。Shairport Sync、UxPlay 这类接收端会把 Linux 变成一个 AirPlay
+音箱；AirFlash Linux 则相反，它是发送端：Linux 负责出声，HomePod
+负责播放。
 
 **必须用 PipeWire 吗？**
-PipeWire 是主路径（当前主流发行版都是它）；只有 PulseAudio 的机器会
-回退到 `parec`。声音采集不依赖合成器，Wayland 和 X11 会话下行为一致。
+现在主流发行版基本都用 PipeWire，这是首选路径；只有 PulseAudio 时
+会回退到 `parec`。音频采集不依赖合成器，所以 Wayland 和 X11 下的
+用法相同。
 
 **和 OwnTone 有什么区别？**
-OwnTone 是媒体服务器，播的是你给它的曲库文件；AirFlash Linux 采集的是
-整个桌面的实时输出——浏览器、播放器、通话、游戏——直接发送，带桌面
-面板和 CLI，不需要配置服务器。
+OwnTone 是媒体服务器，播放的是你放进曲库的文件。AirFlash Linux
+采集的是整个桌面的实时声音——浏览器、播放器、通话和游戏都可以——
+而且有桌面面板和 CLI，不用先配置一台服务器。
 
 **延迟怎么样？**
-实时模式的目标调度延迟是 120 ms，听音乐和日常桌面使用足够；端到端
-声学延迟还取决于接收端和网络状况，应用本身不做测量，所以它不适合
-竞技游戏这类场景。
+实时模式的目标调度延迟为 120 ms，听音乐和日常使用桌面已经足够。
+实际听到的延迟还受接收端和网络影响，应用不会测量这项数据；竞技游戏
+这类对延迟特别敏感的场景并不适合。
 
 ## 技术栈
 
@@ -220,15 +217,15 @@ Linux 构建、打包与 systemd 的完整说明见 [LINUX.md](LINUX.md)（英�
 ## 与上游的关系
 
 AirFlash Linux 是 [Ding-Kyoma/AirFlash](https://github.com/Ding-Kyoma/AirFlash)
-（Windows 版）的 fork，持续跟进上游版本——共享引擎和核心的改进在平台
-无关的部分双向流动。本仓库维护 Linux 打包、Avalonia 面板、Linux 采集
-路径和 Linux 发布；Windows 版的安装与使用见上游仓库。
+（Windows 版）的 fork，并持续跟进上游。共享引擎和核心代码中与平台
+无关的改进会双向合并。本仓库主要维护 Linux 打包、Avalonia 面板、
+Linux 音频采集和 Linux 发布；Windows 版的安装和使用说明见上游仓库。
 
 ## 参与贡献
 
-欢迎 PR——尤其是其他发行版、桌面环境和接收端型号的实测报告。提交时
-请写清协议行为、配对边界和测量限制，并注明哪些是在真实硬件上测的、
-哪些只是对模拟接收端测的。
+欢迎提交 PR，尤其是其他发行版、桌面环境和接收端型号的实测报告。
+提交时请说明协议行为、配对限制和测量条件，并标注哪些结果来自真实
+硬件，哪些只是模拟接收端测试。
 
 ## 许可证
 

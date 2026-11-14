@@ -7,7 +7,7 @@
 
 <p align="center">
   <a href="https://github.com/yoruraven/AirFlash-Linux/releases/latest"><img src="https://img.shields.io/github/v/release/yoruraven/AirFlash-Linux" alt="Latest release of AirFlash Linux" /></a>
-  <img src="https://img.shields.io/badge/platform-Linux%20x86__64-blue" alt="Platform: Linux x86_64" />
+  <img src="https://img.shields.io/badge/platform-Linux%20x86__64%20%7C%20arm64-blue" alt="Platform: Linux x86_64 and arm64" />
   <img src="https://img.shields.io/badge/AirPlay%202-sender-black" alt="AirPlay 2 sender for Linux" />
   <img src="https://img.shields.io/badge/license-GPLv3%2B%20or%20Commercial-green" alt="License: GPLv3+ or commercial" />
 </p>
@@ -47,9 +47,8 @@ server to run — pick a receiver and your desktop sound plays on the HomePod.
    runtime inside. The AppImage is not code-signed; verify it against the
    release's `SHA256SUMS.txt`.
 
-2. Make sure the PC and the HomePod (running HomePod OS 26 or later) are on
-   the same local network, open AirFlash, and wait for the receiver list to
-   populate.
+2. Make sure the PC and the HomePod are on the same local network, open
+   AirFlash, and wait for the receiver list to populate.
 
 3. Select the receiver (or the complete `HomePod stereo · 2/2` entry for a
    stereo pair) and press play. In **Settings → Audio source**, choose system
@@ -86,8 +85,8 @@ units, the full command reference and the PTP port setup described below.
   microphone is never picked up by name matching); on PulseAudio-only hosts it
   falls back to `parec`. `--monitor NAME` selects a different sink.
 - **HomePod and HomePod stereo pairs** — single receivers and existing
-  two-device stereo pairs, including per-receiver volume. Supports
-  **HomePod OS 26 and later** (AirPlay 2).
+  two-device stereo pairs, including per-receiver volume — **now with
+  support for HomePod OS 26** (AirPlay 2).
 - **Graphical panel and headless CLI** — an Avalonia panel sharing the Windows
   build's core (receiver list, equalizer, diagnostics, settings), plus a
   scriptable `airflash-cli` with daemon mode, JSON output and
@@ -98,9 +97,9 @@ units, the full command reference and the PTP port setup described below.
 - **Ten-band equalizer** with presets and live preview, automatic
   reconnection, silence standby (release the session when quiet, resume when
   audio returns), and detailed connection diagnostics.
-- **Self-contained AppImage** for Linux x86_64 — no .NET, Python or other
-  runtime to install. An aarch64 build is produced by the same script but is
-  not hardware-qualified yet.
+- **Self-contained AppImages** for Linux x86_64 and arm64 — no .NET,
+  Python or other runtime to install. The arm64 build is not
+  hardware-qualified yet.
 - English and Simplified Chinese UI.
 
 ## Tested on real hardware
@@ -135,13 +134,13 @@ hardware-tested. Reports from other distributions are very welcome.
   PIN, pair once via the panel (**Settings → Receivers**) or
   `airflash-cli pair`. If pairing fails with `pairing rejected (TLV error
   [2])`, open the Home app, set speaker access to **Everyone**, and try again.
-- **PTP needs ports 319/320.** AirPlay 2 receivers such as HomePods require
-  PTP timing, and UDP 319/320 are privileged ports. Grant them once with
+- **PTP timing uses ports 319/320.** PTP is preferred for tightly synced
+  AirPlay 2 playback, but UDP 319/320 are privileged ports. If they cannot
+  be bound, the engine warns and falls back to NTP timing instead of
+  failing the stream. For full PTP sync, grant access once with
   `sudo setcap cap_net_bind_service=+ep` on the binary, by lowering
   `net.ipv4.ip_unprivileged_port_start`, or via the `AmbientCapabilities`
-  line in the shipped systemd unit. Without PTP the session connects but the
-  receiver rejects the audio stream. `--timing auto` (the default) warns
-  explicitly when it has to fall back.
+  line in the shipped systemd unit.
 - **Same network, no NAT in between.** The receiver must be able to send UDP
   back to this host; bridged networking works, NATed VM guests generally do
   not. See [PTP startup troubleshooting](docs/PTP-TROUBLESHOOTING.md).

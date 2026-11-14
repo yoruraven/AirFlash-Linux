@@ -305,12 +305,14 @@
             <TextBlock Text="{x:Static services:AppPaths.VersionLabel}" Classes="HintText" Margin="0,6,0,0" />
             <WrapPanel Margin="0,20,0,12">
               <Button Content="{loc:Text 'Check for updates'}" Command="{Binding CheckUpdatesCommand}" Margin="0,0,10,8" />
+              <Button Content="{loc:Text 'Open repository'}" Command="{Binding OpenRepositoryCommand}" Margin="0,0,10,8" />
               <Button Content="{loc:Text 'Open download page'}" Command="{Binding OpenDownloadCommand}" IsVisible="{Binding Updates.HasUpdate}" Margin="0,0,0,8" />
             </WrapPanel>
             <ProgressBar Height="3" IsIndeterminate="True" IsVisible="{Binding Updates.IsChecking}" Margin="0,0,0,8" />
             <TextBlock Text="{Binding Updates.Status}" Classes="HintText" Margin="0,0,0,12" />
             <TextBlock Text="{loc:Text 'Stream Linux audio to an AirPlay receiver or an existing HomePod stereo pair.'}" Classes="BodyText" />
             <TextBlock Text="{loc:Text 'GPLv3 or later, or commercial license · .NET / Avalonia / Rust'}" Classes="HintText" Margin="0,20,0,0" />
+            <TextBlock Text="Linux port by YoruRaven · Based on the original AirFlash by Ding-Kyoma" Classes="HintText" Margin="0,4,0,0" />
           </StackPanel>
         </Border>
         <WrapPanel>
