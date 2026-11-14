@@ -21,6 +21,8 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+      - name: Allow binding the PTP test ports (319/320 are privileged on this image)
+        run: sudo sysctl -w net.ipv4.ip_unprivileged_port_start=0
       - name: Rust tests (engine, discovery, CLI lifecycle, simulated audio)
         run: |
           cargo test --locked --features cli --manifest-path native/airflash-engine/Cargo.toml
