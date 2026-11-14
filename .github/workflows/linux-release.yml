@@ -94,9 +94,83 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  cli:
+    name: CLI package (${{ matrix.arch }})
+    # Built on Ubuntu 22.04 (glibc 2.35) so the headless binaries also run
+    # on Raspberry Pi OS Bookworm and other older userlands; the AppImage
+    # builds above stay on 24.04. The engine is pure Rust, so aarch64 is
+    # cross-compiled on the x86_64 runner with the GNU cross linker.
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            target: x86_64-unknown-linux-gnu
+            linker: ''
+          - arch: aarch64
+            target: aarch64-unknown-linux-gnu
+            linker: 'aarch64-linux-gnu-gcc'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            V="${{ inputs.version }}"
+          else
+            V="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Install cross linker (aarch64)
+        if: matrix.arch == 'aarch64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Build headless binaries
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker }}
+        run: |
+          cargo build --release --locked --features cli \
+            --target ${{ matrix.target }} \
+            --manifest-path native/airflash-engine/Cargo.toml
+
+      - name: Stage the CLI tarball
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          stage="AirFlash-$VERSION-$ARCH-cli"
+          mkdir -p "$stage"
+          bindir="native/airflash-engine/target/$TARGET/release"
+          cp "$bindir/airflash-engine" "$bindir/airflash-cli" "$stage/"
+          cp packaging/linux/systemd/user/airflash-cli.service \
+             packaging/linux/systemd/user/airflash-cli@.service "$stage/"
+          cp packaging/linux/config/cli.json.example \
+             packaging/linux/config/cli.env.example "$stage/"
+          cp docs/HEADLESS.md "$stage/README.md"
+          tar -czf "$stage.tar.gz" "$stage"
+          ls -la "$stage.tar.gz"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: airflash-cli-${{ matrix.arch }}
+          path: AirFlash-*.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
   release:
     name: Publish release
-    needs: build
+    needs: [build, cli]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:
