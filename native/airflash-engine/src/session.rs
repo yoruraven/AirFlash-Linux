@@ -296,25 +296,6 @@ fn ptp_ports_bindable() -> bool {
     )
 }
 
-fn resolve_timing(requested: &str) -> Result<String> {
-    match requested {
-        "ptp" | "ntp" => Ok(requested.to_string()),
-        "auto" => Ok(if ptp_ports_bindable() {
-            "ptp"
-        } else {
-            "ntp"
-        }
-        .to_string()),
-        _ => anyhow::bail!("timing must be ptp, ntp or auto"),
-    }
-}
-/// HomePods advertise PCM (cn=0) but reject PCM streams with 400; ALAC is the
-/// AirPlay-2-native codec, so prefer it whenever the receiver lists it (or
-/// advertises nothing) and fall back to the other codec when the audio SETUP
-/// is rejected.
-fn prefer_alac(codecs: &[u8]) -> bool {
-    codecs.is_empty() || codecs.contains(&1)
-}
 fn dictionary(items: Vec<(&str, Value)>) -> Value {
     Value::Dictionary(
         items
