@@ -2,9 +2,10 @@
 function Remove-AirFlashBuildDirectory {
     param([string]$RepoRoot, [string]$Path)
 
-    $root = [IO.Path]::GetFullPath($RepoRoot).TrimEnd('\')
+    $separator = [IO.Path]::DirectorySeparatorChar
+    $root = [IO.Path]::GetFullPath($RepoRoot).TrimEnd($separator)
     $target = [IO.Path]::GetFullPath($Path)
-    if (-not $target.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase) -or $target -eq $root) {
+    if (-not $target.StartsWith($root + $separator, [StringComparison]::OrdinalIgnoreCase) -or $target -eq $root) {
         throw "Unsafe cleanup target: $target"
     }
     if (Test-Path -LiteralPath $target) {
