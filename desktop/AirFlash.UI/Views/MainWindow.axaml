@@ -75,8 +75,17 @@
                       <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
                       <TextBlock Text="{Binding StateText}" Classes="HintText" Margin="0,3,0,0" />
                     </StackPanel>
-                    <Button Grid.Column="2" Classes="IconButton" Content="{Binding PlayGlyph}" Command="{Binding ToggleCommand}"
-                            ToolTip.Tip="{Binding PlayHint}" Foreground="{DynamicResource AccentBrush}" />
+                    <Button Grid.Column="2" Classes="IconButton" Command="{Binding ToggleCommand}"
+                            ToolTip.Tip="{Binding PlayHint}" Foreground="{DynamicResource AccentBrush}">
+                      <Grid Width="18" Height="18">
+                        <Viewbox IsVisible="{Binding !Active}">
+                          <Path Fill="{DynamicResource AccentBrush}" Data="M8.5,5.6 C8.5,4.72 9.4,4.2 10.18,4.66 L18.6,11.34 C19.24,11.84 19.24,12.66 18.6,13.16 L10.18,19.34 C9.39,19.81 8.5,19.28 8.5,18.4 Z" />
+                        </Viewbox>
+                        <Viewbox IsVisible="{Binding Active}">
+                          <Path Fill="{DynamicResource AccentBrush}" Data="M7.5,7 L16.5,7 C17.05,7 17.5,7.45 17.5,8 L17.5,16 C17.5,16.55 17.05,17 16.5,17 L7.5,17 C6.95,17 6.5,16.55 6.5,16 L6.5,8 C6.5,7.45 6.95,7 7.5,7 Z" />
+                        </Viewbox>
+                      </Grid>
+                    </Button>
                     <Grid Grid.Row="1" Grid.ColumnSpan="3" Margin="0,9,0,0" ColumnDefinitions="108,*,40,Auto">
                       <TextBlock Text="{Binding VolumeStatus}" Classes="HintText" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,8,0" />
                       <Slider Grid.Column="1" Classes="AccentSlider" Minimum="0" Maximum="100" TickFrequency="1" IsSnapToTickEnabled="True"
@@ -113,13 +122,16 @@
       </StackPanel>
       <StackPanel Grid.Row="4" Margin="2,4,2,0">
         <DockPanel>
+          <Button DockPanel.Dock="Right" Content="{loc:Text 'Copy'}" ToolTip.Tip="{loc:Text 'Copy error details'}"
+                  Command="{Binding CopyErrorCommand}" IsVisible="{Binding ErrorDetails, Converter={StaticResource NonEmpty}}"
+                  FontSize="11" Padding="8,2" VerticalAlignment="Top" />
           <Ellipse Width="6" Height="6" Fill="{DynamicResource AccentBrush}" Margin="0,0,7,0" />
           <TextBlock Text="{Binding StatusTitle}" FontWeight="SemiBold" FontSize="12" />
         </DockPanel>
-        <TextBlock Text="{Binding StatusDetail}" Classes="HintText" Margin="13,4,0,0" MaxHeight="62" TextTrimming="CharacterEllipsis" />
+        <SelectableTextBlock Text="{Binding StatusDetail}" Classes="HintText" Margin="13,4,0,0" />
         <Expander Header="{loc:Text 'View error details'}" IsVisible="{Binding ErrorDetails, Converter={StaticResource NonEmpty}}" Margin="0,8,0,0">
           <ScrollViewer MaxHeight="120" VerticalScrollBarVisibility="Auto">
-            <TextBlock Text="{Binding ErrorDetails}" Classes="HintText" Margin="0,8,0,0" />
+            <SelectableTextBlock Text="{Binding ErrorDetails}" Classes="HintText" Margin="0,8,0,0" />
           </ScrollViewer>
         </Expander>
       </StackPanel>

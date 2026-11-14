@@ -30,6 +30,46 @@ pub fn path(root: &Path, id: &str) -> PathBuf {
     ))
 }
 
+pub fn load_password(root: &Path, id: &str) -> Result<Option<Zeroizing<String>>> {
+    // Unix counterpart of the Windows DPAPI password file: a plain file in
+    // the same 0600 credential directory. Nothing writes one yet, so this is
+    // normally None; it exists so shared session code can ask uniformly.
+    let target = path(root, id).with_extension("password");
+    if !target.exists() {
+        return Ok(None);
+    }
+    ensure!(
+        std::fs::metadata(&target)?.len() <= 16384,
+        "password file too large"
+    );
+    let text = std::fs::read_to_string(target)?;
+    Ok(Some(Zeroizing::new(text)))
+}
+
+pub fn save_password(root: &Path, id: &str, password: &str) -> Result<()> {
+    // Plain file in the 0600 credential directory (see load_password).
+    std::fs::create_dir_all(root)?;
+    let target = path(root, id).with_extension("password");
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(target)?;
+    file.write_all(password.as_bytes())?;
+    Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn write_test_payload(root: &Path, id: &str, clear: &[u8]) -> Result<()> {
+    // The Unix store is MAGIC + JSON (no DPAPI), so a test payload is the
+    // magic header followed by the raw bytes; load() then fails on them.
+    let mut data = MAGIC.to_vec();
+    data.extend_from_slice(clear);
+    std::fs::write(path(root, id), data)?;
+    Ok(())
+}
+
 pub fn save(root: &Path, id: &str, credentials: &Credentials) -> Result<()> {
     std::fs::create_dir_all(root)?;
     let clear = Zeroizing::new(serde_json::to_vec(credentials)?);

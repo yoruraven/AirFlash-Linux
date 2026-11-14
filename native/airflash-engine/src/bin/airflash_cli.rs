@@ -320,9 +320,11 @@ fn build_options(settings: &SessionSettings) -> Result<ProbeOptions> {
     };
     let options = ProbeOptions {
         peers: vec![airflash_engine::session::Peer {
+            receiver_id: String::new(),
             host,
             port: settings.port.unwrap_or(7000),
             codecs,
+            profile: Default::default(),
         }],
         wav_path,
         source: source.to_string(),
@@ -334,8 +336,18 @@ fn build_options(settings: &SessionSettings) -> Result<ProbeOptions> {
         sample_rate: rate,
         timing,
         group_id: None,
+        group_mode: String::new(),
         handshake_only: false,
         record_mic_path: None,
+        intent: Default::default(),
+        capture_application_path: None,
+        capture_process_id: None,
+        capture_process_started_at: None,
+        standby: Default::default(),
+        force_latency: false,
+        adaptive_latency: false,
+        adaptive_initial_latency_ms: None,
+        report_session_id: String::new(),
     };
     options.validate_start()?;
     Ok(options)

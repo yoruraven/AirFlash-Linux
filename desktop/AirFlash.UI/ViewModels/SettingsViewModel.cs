@@ -24,6 +24,25 @@ public sealed class SettingsViewModel : ObservableObject, IDisposable
     public RelayCommand OpenDownloadCommand { get; }
     public AppViewModel App { get; }
     public AppSettings Draft { get; }
+
+    /// <summary>
+    /// The fork's single stream-rate choice, kept after upstream made the
+    /// rate per-receiver: it reads the receivers' common rate and writes
+    /// the chosen rate into every receiver profile in the draft.
+    /// </summary>
+    public string GlobalSampleRate
+    {
+        get
+        {
+            var rates = Draft.Receivers.Values.Select(o => o.SampleRate).Distinct().ToArray();
+            return rates.Length == 1 ? rates[0] ?? "44100" : "44100";
+        }
+        set
+        {
+            foreach (var options in Draft.Receivers.Values) options.SampleRate = value;
+            Notify(nameof(GlobalSampleRate));
+        }
+    }
     private AppSettings _baseline;
     private readonly HashSet<ReceiverOptions> _subscribed = [];
     private int _selectedPage, _validationErrors;
@@ -125,7 +144,7 @@ public sealed class SettingsViewModel : ObservableObject, IDisposable
     private void ManualChanged(object? sender, NotifyCollectionChangedEventArgs args) { if (!_updating) RefreshValidation(); }
     private void DraftChanged(object? sender, PropertyChangedEventArgs args)
     {
-        if (args.PropertyName == nameof(AppSettings.StreamSampleRate)) Equalizer.RefreshHeadroom();
+        if (args.PropertyName == nameof(ReceiverOptions.SampleRate)) Equalizer.RefreshHeadroom();
         if (_updating) return;
         RefreshValidation();
     }
@@ -141,7 +160,7 @@ public sealed class SettingsViewModel : ObservableObject, IDisposable
     private int EqualizerSampleRate()
     {
         var snapshot = App.Session.Snapshot;
-        return snapshot.IsActive && snapshot.StreamRate is 44100 or 48000 ? snapshot.StreamRate : int.TryParse(Draft.StreamSampleRate, out var rate) ? rate : 44100;
+        return snapshot.IsActive && snapshot.StreamRate is 44100 or 48000 ? snapshot.StreamRate : int.TryParse(GlobalSampleRate, out var rate) ? rate : 44100;
     }
     private void EqualizerFeedback(string? error)
     {

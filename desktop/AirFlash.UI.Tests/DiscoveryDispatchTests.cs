@@ -23,9 +23,11 @@ public sealed class DiscoveryDispatchTests
         public event Action<IReadOnlyList<Receiver>>? Changed;
 #pragma warning disable CS0067 // Part of IDiscoveryService; nothing raises it here.
         public event Action<string>? Failed;
+        public event Action<bool>? RunningChanged;
 #pragma warning restore CS0067
         public void SetInterface(string id) { }
         public void Start() => Changed?.Invoke(receivers);
+        public void Stop() { }
         public void Dispose() => Changed = null;
     }
 

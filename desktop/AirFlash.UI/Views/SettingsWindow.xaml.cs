@@ -28,7 +28,11 @@ public partial class SettingsWindow : Window
             {
                 navigation.SelectionChanged += (_, _) =>
                 {
-                    if (Model is { } current) current.App.SetMonitorVisible(current.SelectedPage == SettingsViewModel.MonitorPage);
+                    if (Model is { } current)
+                    {
+                        ShowPage(current.SelectedPage);
+                        current.App.SetMonitorVisible(current.SelectedPage == SettingsViewModel.MonitorPage);
+                    }
                 };
             }
             ShowPage(Model.SelectedPage);

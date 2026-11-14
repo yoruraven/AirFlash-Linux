@@ -65,8 +65,8 @@
         <Border Classes="Card">
           <StackPanel>
             <TextBlock Text="{loc:Text 'Stream format'}" Classes="SectionTitleText" />
-            <RadioButton Content="{loc:Text '44.1 kHz · 16-bit (default)'}" GroupName="Rate" IsChecked="{Binding Draft.StreamSampleRate, Converter={StaticResource Equal}, ConverterParameter=44100}" />
-            <RadioButton Content="{loc:Text '48 kHz · 16-bit'}" GroupName="Rate" IsChecked="{Binding Draft.StreamSampleRate, Converter={StaticResource Equal}, ConverterParameter=48000}" />
+            <RadioButton Content="{loc:Text '44.1 kHz · 16-bit (default)'}" GroupName="Rate" IsChecked="{Binding GlobalSampleRate, Converter={StaticResource Equal}, ConverterParameter=44100}" />
+            <RadioButton Content="{loc:Text '48 kHz · 16-bit'}" GroupName="Rate" IsChecked="{Binding GlobalSampleRate, Converter={StaticResource Equal}, ConverterParameter=48000}" />
             <TextBlock Text="{loc:Text 'Timing uses the AirPlay PTP profile when the privileged ports are available; otherwise choose NTP in the config file.'}" Classes="HintText" Margin="0,14,0,0" />
           </StackPanel>
         </Border>

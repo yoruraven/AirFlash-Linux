@@ -41,6 +41,9 @@ pub mod volume;
 
 #[cfg(windows)]
 pub mod applications;
+#[cfg(not(windows))]
+#[path = "applications_unix.rs"]
+pub mod applications;
 
 #[cfg(test)]
 mod test_net;

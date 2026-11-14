@@ -15,7 +15,8 @@ public sealed class LinuxDiscovery : IDiscoveryService
 {
     private static readonly TimeSpan Interval = TimeSpan.FromSeconds(5);
     private readonly System.Timers.Timer _timer = new(Interval.TotalMilliseconds) { AutoReset = false };
-    private readonly CancellationTokenSource _stop = new();
+    private CancellationTokenSource _stop = new();
+    private bool _running;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private Task _loop = Task.CompletedTask;
     private string _interface = "";
@@ -23,6 +24,7 @@ public sealed class LinuxDiscovery : IDiscoveryService
 
     public event Action<IReadOnlyList<Receiver>>? Changed;
     public event Action<string>? Failed;
+    public event Action<bool>? RunningChanged;
 
     public void SetInterface(string id)
     {
@@ -33,20 +35,36 @@ public sealed class LinuxDiscovery : IDiscoveryService
 
     public void Start()
     {
-        if (_disposed || _loop.IsCompleted == false) return;
+        if (_disposed || _running) return;
+        if (_stop.IsCancellationRequested)
+        {
+            _stop.Dispose();
+            _stop = new CancellationTokenSource();
+        }
+        _running = true;
         _loop = Task.Run(LoopAsync);
+        RunningChanged?.Invoke(true);
+    }
+
+    public void Stop()
+    {
+        if (!_running) return;
+        _running = false;
+        _stop.Cancel();
+        RunningChanged?.Invoke(false);
     }
 
     private async Task LoopAsync()
     {
-        while (!_stop.IsCancellationRequested)
+        var stop = _stop;
+        while (!stop.IsCancellationRequested)
         {
             try
             {
-                await _gate.WaitAsync(_stop.Token).ConfigureAwait(false);
+                await _gate.WaitAsync(stop.Token).ConfigureAwait(false);
                 try
                 {
-                    var records = await QueryAsync(_stop.Token).ConfigureAwait(false);
+                    var records = await QueryAsync(stop.Token).ConfigureAwait(false);
                     if (records is not null) Changed?.Invoke(ReceiverAggregator.Build(records));
                 }
                 finally { _gate.Release(); }
@@ -56,7 +74,7 @@ public sealed class LinuxDiscovery : IDiscoveryService
             {
                 Failed?.Invoke(error.Message);
             }
-            try { await Task.Delay(Interval, _stop.Token).ConfigureAwait(false); }
+            try { await Task.Delay(Interval, stop.Token).ConfigureAwait(false); }
             catch (OperationCanceledException) { return; }
         }
     }

@@ -39,11 +39,21 @@ use std::{
 const NATIVE_RATE: u32 = 48000;
 const NATIVE_CHANNELS: usize = 2;
 
+/// A warning-shaped state change raised by the capture thread.
+/// The session owns the JSON framing because the capture thread has no emitter.
+#[derive(Clone, Debug)]
+pub struct Warning {
+    pub code: &'static str,
+    pub recovered: bool,
+    pub message: String,
+}
+
 #[derive(Default, Clone, Serialize)]
 pub struct Metrics {
     pub dropped_frames: u64,
     pub underrun_packets: u64,
     pub capture_frames: u64,
+    pub discontinuities: u64,
     pub max_queue_age_ms: f64,
     pub capture_to_send_p95_ms: Option<f64>,
     pub last_audio_qpc_ns: u64,
@@ -65,9 +75,13 @@ struct State {
     error: Option<String>,
     metrics: Metrics,
     ages: VecDeque<f64>,
+    warnings: Vec<Warning>,
 }
 impl State {
     fn push_frame(&mut self, frame: Frame) {
+        if frame.left.abs().max(frame.right.abs()) > 0.004 {
+            self.metrics.last_audio_qpc_ns = frame.stamp;
+        }
         if self.frames.len() >= self.capacity {
             self.frames.pop_front();
             self.metrics.dropped_frames += 1;
@@ -487,6 +501,7 @@ impl Loopback {
             error: None,
             metrics: Metrics::default(),
             ages: VecDeque::with_capacity(4000),
+            warnings: Vec::new(),
         }));
         let stop = Arc::new(AtomicBool::new(false));
         let node = format!("airflash-capture-{}", std::process::id());
@@ -523,6 +538,76 @@ impl Loopback {
         }
     }
 
+    /// Per-application capture is a Windows WASAPI feature; Linux captures
+    /// the whole system mix through the sink monitor instead.
+    pub fn start_application(
+        _application: crate::applications::Application,
+        _pinned: bool,
+        _rate: u32,
+        _equalizer: crate::equalizer::Control,
+    ) -> Result<Self> {
+        anyhow::bail!("application capture is not supported on Linux")
+    }
+
+    /// True once the capture stream has ended (helper exit or read error).
+    pub fn ended(&self) -> bool {
+        self.state.lock().unwrap().error.is_some()
+    }
+
+    /// Capture-side warnings queued since the last call.
+    pub fn take_warnings(&self) -> Vec<Warning> {
+        std::mem::take(&mut self.state.lock().unwrap().warnings)
+    }
+
+    pub fn last_audio(&self) -> u64 {
+        self.state.lock().unwrap().metrics.last_audio_qpc_ns
+    }
+
+    pub fn sample_age_ms(&self) -> f64 {
+        let s = self.state.lock().unwrap();
+        s.frames
+            .front()
+            .map_or(0.0, |f| unix_ns().saturating_sub(f.stamp) as f64 / 1e6)
+    }
+
+    /// `(queued, capacity)` in source frames.
+    pub fn depth(&self) -> (usize, usize) {
+        let s = self.state.lock().unwrap();
+        (s.frames.len(), s.capacity)
+    }
+
+    /// The Unix capture path has no rate servo (PipeWire resamples to the
+    /// native rate and the rubato stage is fixed), so counters stay zero.
+    pub fn servo_metrics(&self) -> crate::servo::ServoCounters {
+        crate::servo::ServoCounters {
+            samples: 0,
+            steps: 0,
+            engagements: 0,
+            releases: 0,
+            saturated: 0,
+            filtered_ms: 0.0,
+            correction_ppm: 0.0,
+        }
+    }
+
+    /// Captured drift estimate in parts per billion; not measured on Unix.
+    pub fn drift_ppb(&self) -> f64 {
+        0.0
+    }
+
+    /// Lateness samples feed the Windows rate servo; no-op on Unix.
+    pub fn report_lateness(&self, _late_ms: f64) {}
+
+    /// One packet of silence without consuming the capture queue (the
+    /// standby fade path); mirrors the Windows packet_inner(force_silence).
+    pub fn silence_packet(&self, _gain: f32) -> Result<(Vec<u8>, Option<u64>)> {
+        let s = self.state.lock().unwrap();
+        if let Some(e) = &s.error {
+            anyhow::bail!("capture stopped: {e}");
+        }
+        Ok((vec![0; FRAMES * 4], None))
+    }
+
     pub fn ready(&self) -> Result<bool> {
         let s = self.state.lock().unwrap();
         if let Some(e) = &s.error {
@@ -555,7 +640,6 @@ impl Loopback {
                 }
             };
             if frame.left.abs().max(frame.right.abs()) > 0.004 {
-                s.metrics.last_audio_qpc_ns = frame.stamp;
                 marker.get_or_insert(frame.stamp);
             }
             let age = now.saturating_sub(frame.stamp) as f64 / 1e6;
@@ -615,9 +699,47 @@ pub(crate) fn helper_path(name: &str) -> PathBuf {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::sync::{Mutex as StdMutex, OnceLock};
+
+    /// A capture source with no helper process, for session tests: frames
+    /// are pushed directly with feed(), like the Windows test source.
+    pub(crate) fn source() -> Loopback {
+        let equalizer_control =
+            crate::equalizer::Control::new(crate::equalizer::Settings::default(), crate::rtp::RATE)
+                .unwrap();
+        Loopback {
+            state: Arc::new(Mutex::new(State {
+                equalizer: crate::equalizer::Processor::new(
+                    equalizer_control.initial(),
+                    crate::rtp::RATE,
+                ),
+                frames: VecDeque::new(),
+                capacity: crate::rtp::RATE as usize * 60 / 1000,
+                target: crate::rtp::RATE as usize * 20 / 1000,
+                error: None,
+                metrics: Metrics::default(),
+                ages: VecDeque::with_capacity(4000),
+                warnings: Vec::new(),
+            })),
+            child: None,
+            worker: None,
+            stop: Arc::new(AtomicBool::new(false)),
+            equalizer_control,
+        }
+    }
+
+    pub(crate) fn feed(source: &Loopback, amplitude: f32) {
+        let mut state = source.state.lock().unwrap();
+        for _ in 0..FRAMES {
+            state.push_frame(Frame {
+                left: amplitude,
+                right: amplitude,
+                stamp: unix_ns(),
+            });
+        }
+    }
 
     /// Helper-binary tests mutate process-global env; serialize them.
     fn env_lock() -> &'static StdMutex<()> {
@@ -797,3 +919,4 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 }
+

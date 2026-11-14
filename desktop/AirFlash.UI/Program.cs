@@ -1,5 +1,6 @@
 using AirFlash.UI.Services;
 using Avalonia;
+using Avalonia.Media;
 
 namespace AirFlash.UI;
 
@@ -34,7 +35,15 @@ internal static class Program
     }
 
     public static AppBuilder BuildAvaloniaApp() =>
-        AppBuilder.Configure<App>().UsePlatformDetect().LogToTrace();
+        AppBuilder.Configure<App>().UsePlatformDetect().LogToTrace()
+            // One explicit stack on every platform: without it Skia picks
+            // whatever fontconfig substitutes first (a serif on some Linux
+            // installs), which made the UI look wrong. Segoe UI covers
+            // Windows, Inter the design language, Noto CJK the Chinese names.
+            .With(new FontManagerOptions
+            {
+                DefaultFamilyName = "Segoe UI, Inter, Noto Sans CJK SC, Liberation Sans, sans-serif",
+            });
 }
 
 /// <summary>Process-wide services created before the UI framework exists.</summary>

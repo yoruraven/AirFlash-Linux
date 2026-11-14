@@ -57,8 +57,11 @@ public partial class App : Application
         desktop.MainWindow = window;
         ConfigureTray();
         ViewModel.Start();
+        // The autostart entry launches with --tray: stay in the tray and
+        // only show the panel on demand (tray menu or a second launch).
+        var startInTray = desktop.Args is { } cliArgs && Array.IndexOf(cliArgs, "--tray") >= 0;
         ViewModel.Startup.ContinueWith(
-            _ => Dispatcher.UIThread.Post(window.Show),
+            _ => Dispatcher.UIThread.Post(() => { if (!startInTray) window.Show(); }),
             TaskScheduler.Default);
         base.OnFrameworkInitializationCompleted();
     }

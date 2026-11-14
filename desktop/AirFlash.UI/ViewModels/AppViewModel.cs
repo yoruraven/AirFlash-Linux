@@ -79,6 +79,7 @@ public sealed class AppViewModel : ObservableObject, IAsyncDisposable
     public string LatencyMode { get => _settings.LatencyMode; set { if (value == _settings.LatencyMode || value is null) return; _settings.LatencyMode = value; VolumeChanged(); Notify(); } }
     public AsyncCommand StopCommand { get; }
     public AsyncCommand MuteCommand { get; }
+    public RelayCommand CopyErrorCommand { get; }
     public event Action? SettingsChanged;
     public event Action? CatalogChanged;
     public AppViewModel(ISettingsStore store, IDiscoveryService discovery, IAutostart autostart, IAudioService audio, IEngineFactory factory)
@@ -99,6 +100,16 @@ public sealed class AppViewModel : ObservableObject, IAsyncDisposable
         _autoTimer.Stop();
         StopCommand = new(() => StopAsync(), ShowError, () => _snapshot.IsActive);
         MuteCommand = new(async () => { await Session.SetMutedAsync(!Session.Muted); Notify(nameof(Muted)); Notify(nameof(MuteLabel)); }, ShowError);
+        CopyErrorCommand = new(() =>
+        {
+            try
+            {
+                var text = ErrorDetails.Length > 0 ? $"{StatusTitle}\n{ErrorDetails}" : StatusDetail;
+                var clipboard = (Avalonia.Application.Current?.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime)?.MainWindow?.Clipboard;
+                _ = clipboard?.SetTextAsync(text);
+            }
+            catch (Exception error) { ShowError(error); }
+        });
     }
     public void Start() => _startup = StartAsync();
     public Task Startup => _startup;

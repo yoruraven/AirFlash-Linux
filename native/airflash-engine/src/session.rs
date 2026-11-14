@@ -111,8 +111,6 @@ const LIVE_SOURCES: [&str; 3] = ["loopback", "file", "simulated"];
 impl ProbeOptions {
     fn validate_forced_latency(&self) -> Result<()> {
         ensure!(
-            LIVE_SOURCES.contains(&self.source.as_str()) && self.duration_ms == 0,
-            "start requires an unbounded live source (loopback, file or simulated)"
             self.adaptive_initial_latency_ms.is_none_or(|ms| ms <= 2000),
             "adaptive initial latency must be 0..2000 ms"
         );
@@ -137,7 +135,7 @@ impl ProbeOptions {
     pub fn validate_start(&self) -> Result<()> {
         self.validate_forced_latency()?;
         ensure!(
-            matches!(self.source.as_str(), "loopback" | "application") && self.duration_ms == 0,
+            matches!(self.source.as_str(), "loopback" | "application" | "file" | "simulated") && self.duration_ms == 0,
             "start requires unbounded live source"
         );
         ensure!(
@@ -348,7 +346,7 @@ fn qpc_ns() -> u64 {
 
 #[cfg(not(windows))]
 fn qpc_ns() -> u64 {
-    0
+    crate::clock::unix_ns()
 }
 
 struct NtpServer {
@@ -634,6 +632,7 @@ impl Member {
         probe: MemberProbe,
         plan: crate::profile::TimingPlan,
         options: &ProbeOptions,
+        inherited_ptp: bool,
         ptp: &mut Option<PtpMaster>,
         clock: &Clock,
         ntp_port: u16,
@@ -654,7 +653,7 @@ impl Member {
             plan,
             &peer.profile,
             options.sample_rate,
-            options.timing == "ptp",
+            inherited_ptp,
         )?;
         if compat.uses_ptp() && ptp.is_none() {
             let peers = options.peers.iter().map(|p| p.host).collect();
@@ -835,35 +834,8 @@ impl Member {
                 "SETUP",
                 &member.uri,
                 &dictionary(vec![("streams", Value::Array(vec![stream]))]),
-            ) {
-                Ok(message) => break message.plist().context("audio SETUP response")?,
-                Err(error)
-                    if !retried_codec
-                        && error
-                            .downcast_ref::<crate::rtsp::Rejected>()
-                            .is_some_and(|rejected| rejected.status == 400) =>
-                {
-                    retried_codec = true;
-                    use_alac = !use_alac;
-                    member.media.packetizer = Packetizer::with_rate(
-                        audio_key,
-                        rand::random(),
-                        initial_rtp,
-                        ssrc,
-                        rate,
-                    );
-                    if use_alac {
-                        member.media.packetizer.enable_alac();
-                    }
-                    emit(
-                        json!({"event":"codec_fallback","host":peer.host,"codec":if use_alac{"alac"}else{"pcm"},"reason":"audio SETUP rejected the first codec"}),
-                    );
-                }
-                Err(error) => {
-                    return Err(error).context("audio SETUP (streams/codec negotiation)");
-                }
-            }
-        };
+            )?
+            .plist()?;
         let stream = response
             .as_dictionary()
             .and_then(|d| d.get("streams"))
@@ -1346,6 +1318,86 @@ trait LiveSource {
     fn packet(&self, gain: f32) -> Result<(Vec<u8>, Option<u64>)>;
     fn discard_stale(&self);
     fn metrics(&self) -> Json;
+    /// The platform capture metrics struct, for telemetry sampling.
+    fn metrics_struct(&self) -> crate::live::Metrics;
+    fn ended(&self) -> bool {
+        false
+    }
+    fn last_audio(&self) -> u64 {
+        0
+    }
+    fn sample_age_ms(&self) -> f64 {
+        0.0
+    }
+    fn depth(&self) -> (usize, usize) {
+        (0, 0)
+    }
+    fn report_lateness(&self, _late_ms: f64) {}
+    fn take_warnings(&self) -> Vec<crate::live::Warning> {
+        Vec::new()
+    }
+    fn servo_counters(&self) -> crate::servo::ServoCounters {
+        crate::servo::ServoCounters {
+            samples: 0,
+            steps: 0,
+            engagements: 0,
+            releases: 0,
+            saturated: 0,
+            filtered_ms: 0.0,
+            correction_ppm: 0.0,
+        }
+    }
+    fn drift_ppb(&self) -> f64 {
+        0.0
+    }
+    fn silence_packet(&self, _gain: f32) -> Result<(Vec<u8>, Option<u64>)> {
+        Ok((vec![0; crate::rtp::FRAMES * 4], None))
+    }
+}
+
+impl<T: LiveSource + ?Sized> LiveSource for &T {
+    fn ready(&self) -> Result<bool> {
+        (**self).ready()
+    }
+    fn packet(&self, gain: f32) -> Result<(Vec<u8>, Option<u64>)> {
+        (**self).packet(gain)
+    }
+    fn discard_stale(&self) {
+        (**self).discard_stale()
+    }
+    fn metrics(&self) -> Json {
+        (**self).metrics()
+    }
+    fn metrics_struct(&self) -> crate::live::Metrics {
+        (**self).metrics_struct()
+    }
+    fn ended(&self) -> bool {
+        (**self).ended()
+    }
+    fn last_audio(&self) -> u64 {
+        (**self).last_audio()
+    }
+    fn sample_age_ms(&self) -> f64 {
+        (**self).sample_age_ms()
+    }
+    fn depth(&self) -> (usize, usize) {
+        (**self).depth()
+    }
+    fn report_lateness(&self, late_ms: f64) {
+        (**self).report_lateness(late_ms)
+    }
+    fn take_warnings(&self) -> Vec<crate::live::Warning> {
+        (**self).take_warnings()
+    }
+    fn servo_counters(&self) -> crate::servo::ServoCounters {
+        (**self).servo_counters()
+    }
+    fn drift_ppb(&self) -> f64 {
+        (**self).drift_ppb()
+    }
+    fn silence_packet(&self, gain: f32) -> Result<(Vec<u8>, Option<u64>)> {
+        (**self).silence_packet(gain)
+    }
 }
 impl LiveSource for crate::live::Loopback {
     fn ready(&self) -> Result<bool> {
@@ -1360,6 +1412,36 @@ impl LiveSource for crate::live::Loopback {
     fn metrics(&self) -> Json {
         serde_json::to_value(self.metrics()).unwrap_or(Json::Null)
     }
+    fn metrics_struct(&self) -> crate::live::Metrics {
+        self.metrics()
+    }
+    fn ended(&self) -> bool {
+        self.ended()
+    }
+    fn last_audio(&self) -> u64 {
+        self.last_audio()
+    }
+    fn sample_age_ms(&self) -> f64 {
+        self.sample_age_ms()
+    }
+    fn depth(&self) -> (usize, usize) {
+        self.depth()
+    }
+    fn report_lateness(&self, late_ms: f64) {
+        self.report_lateness(late_ms)
+    }
+    fn take_warnings(&self) -> Vec<crate::live::Warning> {
+        self.take_warnings()
+    }
+    fn servo_counters(&self) -> crate::servo::ServoCounters {
+        self.servo_metrics()
+    }
+    fn drift_ppb(&self) -> f64 {
+        self.drift_ppb()
+    }
+    fn silence_packet(&self, gain: f32) -> Result<(Vec<u8>, Option<u64>)> {
+        self.silence_packet(gain)
+    }
 }
 impl LiveSource for crate::source::StreamSource {
     fn ready(&self) -> Result<bool> {
@@ -1373,6 +1455,23 @@ impl LiveSource for crate::source::StreamSource {
     }
     fn metrics(&self) -> Json {
         serde_json::to_value(self.metrics()).unwrap_or(Json::Null)
+    }
+    fn metrics_struct(&self) -> crate::live::Metrics {
+        let m = self.metrics();
+        crate::live::Metrics {
+            dropped_frames: m.dropped_frames,
+            underrun_packets: m.underrun_packets,
+            capture_frames: m.capture_frames,
+            discontinuities: 0,
+            max_queue_age_ms: m.max_queue_age_ms,
+            capture_to_send_p95_ms: m.capture_to_send_p95_ms,
+            last_audio_qpc_ns: m.last_audio_qpc_ns,
+            input_rate: m.input_rate,
+        }
+    }
+    fn last_audio(&self) -> u64 {
+        // Test sources are never silent for standby purposes.
+        crate::clock::unix_ns()
     }
 }
 impl LiveSource for Live<'_> {
@@ -1402,6 +1501,80 @@ impl LiveSource for Live<'_> {
             Self::System(source) => LiveSource::metrics(*source),
             Self::OwnedSystem(source) => LiveSource::metrics(source),
             Self::Stream(source) => LiveSource::metrics(source),
+        }
+    }
+    fn metrics_struct(&self) -> crate::live::Metrics {
+        match self {
+            Self::System(source) => LiveSource::metrics_struct(*source),
+            Self::OwnedSystem(source) => LiveSource::metrics_struct(source),
+            Self::Stream(source) => LiveSource::metrics_struct(source),
+        }
+    }
+    fn ended(&self) -> bool {
+        match self {
+            Self::System(source) => source.ended(),
+            Self::OwnedSystem(source) => source.ended(),
+            Self::Stream(source) => source.ended(),
+        }
+    }
+    fn last_audio(&self) -> u64 {
+        match self {
+            Self::System(source) => source.last_audio(),
+            Self::OwnedSystem(source) => source.last_audio(),
+            Self::Stream(source) => source.last_audio(),
+        }
+    }
+    fn sample_age_ms(&self) -> f64 {
+        match self {
+            Self::System(source) => source.sample_age_ms(),
+            Self::OwnedSystem(source) => source.sample_age_ms(),
+            Self::Stream(source) => source.sample_age_ms(),
+        }
+    }
+    fn depth(&self) -> (usize, usize) {
+        match self {
+            Self::System(source) => source.depth(),
+            Self::OwnedSystem(source) => source.depth(),
+            Self::Stream(source) => source.depth(),
+        }
+    }
+    fn report_lateness(&self, late_ms: f64) {
+        match self {
+            Self::System(source) => source.report_lateness(late_ms),
+            Self::OwnedSystem(source) => source.report_lateness(late_ms),
+            Self::Stream(source) => source.report_lateness(late_ms),
+        }
+    }
+    fn take_warnings(&self) -> Vec<crate::live::Warning> {
+        match self {
+            Self::System(source) => LiveSource::take_warnings(*source),
+            Self::OwnedSystem(source) => LiveSource::take_warnings(source),
+            Self::Stream(source) => LiveSource::take_warnings(source),
+        }
+    }
+    fn servo_counters(&self) -> crate::servo::ServoCounters {
+        match self {
+            Self::System(source) => LiveSource::servo_counters(*source),
+            Self::OwnedSystem(source) => LiveSource::servo_counters(source),
+            Self::Stream(source) => LiveSource::servo_counters(source),
+        }
+    }
+    fn drift_ppb(&self) -> f64 {
+        match self {
+            Self::System(source) => LiveSource::drift_ppb(*source),
+            Self::OwnedSystem(source) => LiveSource::drift_ppb(source),
+            Self::Stream(source) => LiveSource::drift_ppb(source),
+        }
+    }
+    fn silence_packet(&self, gain: f32) -> Result<(Vec<u8>, Option<u64>)> {
+        match self {
+            Self::System(source) => source.silence_packet(gain),
+            Self::OwnedSystem(source) => source.silence_packet(gain),
+            Self::Stream(source) => source.silence_packet(gain),
+        }
+    }
+}
+
 /// Probe one member's `/info`, retrying a transient connection failure exactly
 /// like the old single-phase connect did.
 fn probe_member(peer: &Peer, cancel: &Cancellation, emit: &dyn Fn(Json)) -> Result<MemberProbe> {
@@ -1753,6 +1926,54 @@ fn run_live(
             paused = None;
             reason = "";
         }
+        if source.is_none() && matches!(options.source.as_str(), "file" | "simulated") {
+            // File and simulated sources have no capture object for this loop
+            // to manage: run_stream creates and owns them, and its sender
+            // applies standby itself. Mirror the loopback bookkeeping so a
+            // source end reopens the source on the next pass.
+            let ended = match run_stream(
+                &options,
+                &cancel,
+                &gain,
+                volume.clone(),
+                equalizer.clone(),
+                None,
+                &standby,
+                &mut takeovers,
+                reset_before,
+                reclaimed.take(),
+                &emit,
+                (Clock::new(), None),
+            ) {
+                Ok(ended) => ended,
+                Err(error) => {
+                    let Some(reclaim) = error.downcast_ref::<preemption::Reclaim>() else {
+                        return Err(error);
+                    };
+                    reclaimed = Some(reclaim.host);
+                    reset_before = Some(TimelineResetReason::SessionRestart);
+                    options.intent = StartIntent::Automatic;
+                    continue;
+                }
+            };
+            options.intent = StartIntent::Automatic;
+            match ended {
+                StreamEnd::Finished => break,
+                StreamEnd::SourceEnded => {
+                    reset_adaptive_target(&mut options);
+                    paused = None;
+                    reset_before = Some(source_restart_reason());
+                    continue;
+                }
+                StreamEnd::Silence(at) => {
+                    reset_adaptive_target(&mut options);
+                    let _ = at;
+                    emit(json!({"event":"standby","reason":"silence"}));
+                    reset_before = Some(TimelineResetReason::SilenceResume);
+                    continue;
+                }
+            }
+        }
         if source.is_none() {
             let path = options
                 .capture_application_path
@@ -1992,10 +2213,6 @@ fn run_stream(
     } else {
         options.validate()?;
     }
-    let mut options = options;
-    let requested_timing = options.timing.clone();
-    options.timing = resolve_timing(&requested_timing)?;
-    let timing_downgraded = requested_timing == "auto" && options.timing == "ntp";
     let samples = if options.source == "wav" {
         load_quiet_wav(options)?
     } else {
@@ -2061,6 +2278,29 @@ fn run_stream(
             .into());
         }
     };
+    // Whether a solo receiver with an inherited timing profile may run PTP.
+    // Starts as "the user asked for PTP"; the permission fallback below
+    // clears it, because a member negotiated as PTP would try to start the
+    // PTP master and fail on the same ports the fallback just avoided.
+    let mut inherited_ptp = options.timing == "ptp";
+    // A process that may not bind the PTP ports (no CAP_NET_BIND_SERVICE
+    // on Linux, where 319/320 are privileged) would otherwise fail every
+    // PTP start at the first member's SETUP. Probe the binds before any
+    // SETUP: on a permission failure the whole group runs on NTP and the
+    // user is told why, once, on the warning channel.
+    let plan = if plan.timing() == crate::profile::Timing::Ptp && ptp.is_none() && !ptp_ports_bindable() {
+        emit(json!({
+            "event": "warning",
+            "channel": "setup",
+            "code": "ptp_unavailable_fallback_ntp",
+            "recovered": true,
+            "message": "PTP ports 319/320 are unavailable (permission denied), so this session uses NTP timing. For PTP sync, grant the engine binary cap_net_bind_service (sudo setcap cap_net_bind_service=+ep <engine>) or lower net.ipv4.ip_unprivileged_port_start.",
+        }));
+        inherited_ptp = false;
+        crate::profile::TimingPlan::new(crate::profile::Timing::Ntp, plan.receivers())
+    } else {
+        plan
+    };
     // Q33: a group has exactly one plan, so differences between a member's solo
     // answer and the group plan are expected inputs, not a runtime risk. Keep
     // the evidence summary as an internal debug log; it must never reach the
@@ -2085,6 +2325,7 @@ fn run_stream(
                 current,
                 plan,
                 options,
+                inherited_ptp,
                 &mut ptp,
                 &clock,
                 ntp.port,
@@ -2175,42 +2416,32 @@ fn run_stream(
     }
     let clock_id = ptp.as_ref().map(|p| p.clock_id);
     let rate = options.sample_rate;
-    let owned_live = if provided.is_none() && options.source == "loopback" {
-        Some(crate::live::Loopback::start(
+    let live: Option<Live> = if let Some(provided) = provided {
+        Some(Live::System(provided))
+    } else if options.source == "loopback" {
+        Some(Live::OwnedSystem(crate::live::Loopback::start(
             options.capture_endpoint.clone(),
             rate,
             equalizer,
-        )?)
+        )?))
+    } else if options.source == "file" {
+        Some(Live::Stream(crate::source::StreamSource::start(
+            crate::source::Kind::File,
+            options.wav_path.as_path(),
+            rate,
+            equalizer,
+        )?))
+    } else if options.source == "simulated" {
+        Some(Live::Stream(crate::source::StreamSource::start(
+            crate::source::Kind::Simulated,
+            options.wav_path.as_path(),
+            rate,
+            equalizer,
+        )?))
     } else {
         None
     };
-    let owned_stream = if provided.is_none() && options.source != "loopback" {
-        match options.source.as_str() {
-            "file" => Some(crate::source::StreamSource::start(
-                crate::source::Kind::File,
-                options.wav_path.as_path(),
-                rate,
-                equalizer,
-            )?),
-            "simulated" => Some(crate::source::StreamSource::start(
-                crate::source::Kind::Simulated,
-                options.wav_path.as_path(),
-                rate,
-                equalizer,
-            )?),
-            _ => None,
-        }
-    } else {
-        None
-    };
-    let live: Option<Live> = match provided {
-        Some(provided) => Some(Live::System(provided)),
-        None => match owned_live {
-            Some(owned) => Some(Live::OwnedSystem(owned)),
-            None => owned_stream.map(Live::Stream),
-        },
-    };
-    if let Some(source) = live {
+    if let Some(source) = &live {
         let until = Instant::now() + Duration::from_millis(200);
         while !source.ready()? && Instant::now() < until {
             cancel.check()?;
@@ -2229,7 +2460,7 @@ fn run_stream(
         cancel,
         gain,
         volume,
-        live,
+        live.as_ref(),
         standby,
         &clock,
         clock_id,
@@ -2276,12 +2507,12 @@ fn rtp_queue_state(members: &[Member]) -> (usize, u64) {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn send_packets(
+fn send_packets<L: LiveSource>(
     options: &ProbeOptions,
     cancel: &Cancellation,
     gain: &std::sync::Arc<std::sync::atomic::AtomicU32>,
     volume: crate::volume::Control,
-    live: Option<&crate::live::Loopback>,
+    live: Option<&L>,
     standby: &crate::standby::Control,
     clock: &Clock,
     clock_id: Option<u64>,
@@ -2781,7 +3012,7 @@ fn send_packets(
                     &schedule,
                     &telemetry,
                     common_latency,
-                    live.map(crate::live::Loopback::depth),
+                    live.map(|l| l.depth()),
                     ptp,
                     &lead,
                 );
@@ -2933,7 +3164,7 @@ fn send_packets(
         &schedule,
         &telemetry,
         common_latency,
-        live.map(crate::live::Loopback::depth),
+        live.map(|l| l.depth()),
         ptp,
         &lead,
     );
@@ -3334,7 +3565,7 @@ fn preemption_probe_disagreement(
         "message": "The two statusFlags probes disagreed; keeping the non-destructive verdict",
     })
 }
-fn emit_capture_warnings(source: &crate::live::Loopback, emit: &impl Fn(Json)) {
+fn emit_capture_warnings(source: &dyn LiveSource, emit: &impl Fn(Json)) {
     for warning in source.take_warnings() {
         emit(json!({
             "event": "warning",
@@ -3348,11 +3579,11 @@ fn emit_capture_warnings(source: &crate::live::Loopback, emit: &impl Fn(Json)) {
 }
 
 fn sample_capture(
-    source: &crate::live::Loopback,
+    source: &dyn LiveSource,
     baseline: &mut Option<crate::live::Metrics>,
     telemetry: &mut crate::telemetry::SessionTelemetry,
 ) {
-    let metrics = source.metrics();
+    let metrics = source.metrics_struct();
     if let Some(previous) = baseline {
         telemetry.input_drops += metrics
             .dropped_frames
@@ -3360,7 +3591,7 @@ fn sample_capture(
         telemetry.capture_glitches += metrics
             .discontinuities
             .saturating_sub(previous.discontinuities);
-        let servo = source.servo_metrics();
+        let servo = source.servo_counters();
         telemetry.servo_engagements = servo.engagements;
         telemetry.servo_releases = servo.releases;
         telemetry.servo_step_resets = servo.steps;
@@ -4177,7 +4408,7 @@ mod tests {
             &Cancellation::default(),
             &std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0.0f32.to_bits())),
             crate::volume::Control::default(),
-            None,
+            None::<&crate::live::Loopback>,
             &crate::standby::Control::default(),
             &Clock::new(),
             None,
@@ -4278,7 +4509,7 @@ mod tests {
             &Cancellation::default(),
             &std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0.0f32.to_bits())),
             crate::volume::Control::default(),
-            None,
+            None::<&crate::live::Loopback>,
             &crate::standby::Control::default(),
             &clock,
             None,
@@ -5622,7 +5853,7 @@ mod tests {
             &Cancellation::default(),
             &gain,
             crate::volume::Control::default(),
-            None,
+            None::<&crate::live::Loopback>,
             &crate::standby::Control::default(),
             &Clock::new(),
             None,
@@ -5671,7 +5902,7 @@ mod tests {
             &Cancellation::default(),
             &gain,
             crate::volume::Control::default(),
-            None,
+            None::<&crate::live::Loopback>,
             &crate::standby::Control::default(),
             &Clock::new(),
             None,
@@ -5724,7 +5955,7 @@ mod tests {
             &Cancellation::default(),
             &gain,
             crate::volume::Control::default(),
-            None,
+            None::<&crate::live::Loopback>,
             &crate::standby::Control::default(),
             &Clock::new(),
             None,
@@ -5762,7 +5993,7 @@ mod tests {
             &Cancellation::default(),
             &gain,
             crate::volume::Control::default(),
-            None,
+            None::<&crate::live::Loopback>,
             &crate::standby::Control::default(),
             &Clock::new(),
             None,
@@ -5835,7 +6066,7 @@ mod tests {
             &Cancellation::default(),
             &gain,
             crate::volume::Control::default(),
-            None,
+            None::<&crate::live::Loopback>,
             &crate::standby::Control::default(),
             &Clock::new(),
             None,
@@ -5973,7 +6204,7 @@ mod tests {
             &Cancellation::default(),
             &gain,
             crate::volume::Control::default(),
-            None,
+            None::<&crate::live::Loopback>,
             &crate::standby::Control::default(),
             &Clock::new(),
             None,
@@ -6021,7 +6252,7 @@ mod tests {
             &Cancellation::default(),
             &gain,
             crate::volume::Control::default(),
-            None,
+            None::<&crate::live::Loopback>,
             &crate::standby::Control::default(),
             &Clock::new(),
             None,

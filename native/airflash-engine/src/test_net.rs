@@ -25,11 +25,28 @@ fn unique_loopback() -> IpAddr {
 pub(crate) fn ptp_receiver_sockets() -> (IpAddr, UdpSocket, UdpSocket) {
     loop {
         let ip = unique_loopback();
-        let Ok(event) = UdpSocket::bind((ip, 319)) else {
-            continue;
+        let event = match UdpSocket::bind((ip, 319)) {
+            Ok(socket) => socket,
+            // A permission failure is permanent, unlike a collision: retrying
+            // it spins forever (on Linux, ports below
+            // net.ipv4.ip_unprivileged_port_start need CAP_NET_BIND_SERVICE).
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                panic!(
+                    "binding the PTP test ports needs CAP_NET_BIND_SERVICE: \
+                     sudo setcap cap_net_bind_service=+ep <test-binary> ({error})"
+                );
+            }
+            Err(_) => continue,
         };
-        let Ok(general) = UdpSocket::bind((ip, 320)) else {
-            continue;
+        let general = match UdpSocket::bind((ip, 320)) {
+            Ok(socket) => socket,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                panic!(
+                    "binding the PTP test ports needs CAP_NET_BIND_SERVICE: \
+                     sudo setcap cap_net_bind_service=+ep <test-binary> ({error})"
+                );
+            }
+            Err(_) => continue,
         };
         return (ip, event, general);
     }

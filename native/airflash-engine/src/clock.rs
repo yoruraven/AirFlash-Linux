@@ -168,7 +168,7 @@ pub fn announce(clock: u64, seq: u16, ns: u64) -> Vec<u8> {
     timestamp(&mut p[34..44], ns);
     p[44..46].copy_from_slice(&0u16.to_be_bytes()); // currentUtcOffset
     p[46] = 0; // reserved
-    p[47] = 128; // grandmasterPriority1
+    p[47] = OUR_PRIORITY1; // grandmasterPriority1
     p[48] = 248; // clockClass (local oscillator, not GPS)
     p[49] = 0xfe; // clockAccuracy
     p[50..52].copy_from_slice(&0xffffu16.to_be_bytes()); // variance
@@ -1675,7 +1675,7 @@ mod tests {
         // clockClass, clockAccuracy, variance, priority2, grandmasterIdentity,
         // stepsRemoved, timeSource, then the PATH_TRACE TLV.
         assert_eq!(&announced[44..47], &[0, 0, 0]); // UTC offset + reserved
-        assert_eq!(announced[47], 128); // grandmasterPriority1
+        assert_eq!(announced[47], OUR_PRIORITY1); // grandmasterPriority1
         assert_eq!(&announced[48..53], &[248, 0xfe, 0xff, 0xff, 128]); // class, accuracy, variance, priority2
         assert_eq!(&announced[53..61], &id.to_be_bytes()); // grandmasterIdentity
         assert_eq!(&announced[61..64], &[0, 0, 0xa0]); // stepsRemoved, timeSource
