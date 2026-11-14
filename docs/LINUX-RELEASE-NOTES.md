@@ -5,7 +5,7 @@ Linux x86_64 and arm64 (aarch64) · English and Simplified Chinese · AirPlay 2 
 This is the first Linux release built on the merged upstream 0.6.3 codebase.
 It streams Linux desktop audio (PipeWire system capture, with a PulseAudio
 fallback) to an AirPlay 2 receiver or an existing HomePod stereo pair.
-Receivers need HomePod OS 26 or later (AirPlay 2).
+Includes support for the latest HomePod OS 26 (AirPlay 2).
 
 ## What is in this release
 
