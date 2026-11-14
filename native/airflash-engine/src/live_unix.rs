@@ -111,9 +111,10 @@ fn run_helper(name: &str, args: &[&str]) -> Result<std::process::Output> {
         .with_context(|| format!("run {name}"))
 }
 
-/// A PipeWire sink eligible for monitor capture.
+/// A PipeWire node eligible for capture: a sink (through its monitor)
+/// or a source (directly).
 #[derive(Debug, Clone)]
-struct Sink {
+pub(crate) struct Sink {
     id: u32,
     name: String,
     description: String,
@@ -123,9 +124,12 @@ struct Sink {
 #[derive(Debug, Default)]
 struct Graph {
     sinks: Vec<Sink>,
+    sources: Vec<Sink>,
     default_sink: Option<String>,
     /// (node id, port name) for every monitor output port.
     monitors: Vec<(u32, String)>,
+    /// (node id, port name) for every non-monitor output port (source capture ports).
+    source_ports: Vec<(u32, String)>,
 }
 
 fn parse_graph(json: &str) -> Result<Graph> {
@@ -166,12 +170,12 @@ fn parse_graph(json: &str) -> Result<Graph> {
             .and_then(|p| p.get("node.name"))
             .and_then(|v| v.as_str())
             .unwrap_or_default();
-        if props
+        let media_class = props
             .and_then(|p| p.get("media.class"))
             .and_then(|v| v.as_str())
-            == Some("Audio/Sink")
-        {
-            graph.sinks.push(Sink {
+            .unwrap_or_default();
+        if media_class == "Audio/Sink" || media_class.starts_with("Audio/Source") {
+            let node = Sink {
                 id,
                 name: name.to_owned(),
                 description: props
@@ -179,7 +183,12 @@ fn parse_graph(json: &str) -> Result<Graph> {
                     .and_then(|v| v.as_str())
                     .unwrap_or_default()
                     .to_owned(),
-            });
+            };
+            if media_class == "Audio/Sink" {
+                graph.sinks.push(node);
+            } else {
+                graph.sources.push(node);
+            }
         }
     }
     // Second pass: ports reference their node by id.
@@ -205,6 +214,8 @@ fn parse_graph(json: &str) -> Result<Graph> {
             .unwrap_or_default();
         if direction == "out" && port.starts_with("monitor_") {
             graph.monitors.push((node_id, port.to_owned()));
+        } else if direction == "out" {
+            graph.source_ports.push((node_id, port.to_owned()));
         }
     }
     Ok(graph)
@@ -212,10 +223,13 @@ fn parse_graph(json: &str) -> Result<Graph> {
 
 /// Resolve the sink to capture: explicit endpoint (node name, id or
 /// description) or the default sink, falling back to the first sink.
-pub(crate) fn resolve_monitor(endpoint: Option<&str>) -> Result<(String, String, String)> {
+fn load_graph() -> Result<Graph> {
     let output = run_helper("pw-dump", &[])?;
     ensure!(output.status.success(), "pw-dump failed to list the audio graph");
-    let graph = parse_graph(&String::from_utf8_lossy(&output.stdout))?;
+    parse_graph(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn resolve_monitor_in(graph: &Graph, endpoint: Option<&str>) -> Result<(String, String, String)> {
     ensure!(!graph.sinks.is_empty(), "no PipeWire audio sink found");
     let sink = match endpoint.filter(|s| !s.is_empty()) {
         Some(want) => graph
@@ -257,6 +271,97 @@ pub(crate) fn resolve_monitor(endpoint: Option<&str>) -> Result<(String, String,
         format!("{}:{left}", sink.name),
         format!("{}:{right}", sink.name),
     ))
+}
+
+/// What a capture endpoint resolved to: a sink's monitor ports, or a
+/// source node captured directly (microphone, USB audio input, Bluetooth
+/// A2DP source, virtual source, ...). Source ports are fully qualified
+/// `node:port` names when the source exposes named stereo/mono ports.
+#[derive(Debug)]
+pub(crate) enum CaptureTarget {
+    Monitor {
+        sink: String,
+        left: String,
+        right: String,
+    },
+    Source {
+        node: Sink,
+        left: Option<String>,
+        right: Option<String>,
+    },
+}
+
+/// Resolve a capture endpoint (node name, id or description). Sinks keep
+/// the historical monitor behavior; anything that names a source node —
+/// and only that — takes the direct source path. No endpoint (or an empty
+/// one) means the default sink's monitor.
+pub(crate) fn resolve_target(endpoint: Option<&str>) -> Result<CaptureTarget> {
+    let graph = load_graph()?;
+    if let Some(want) = endpoint.filter(|s| !s.is_empty()) {
+        let names_sink = graph
+            .sinks
+            .iter()
+            .any(|s| s.name == want || s.description == want || s.id.to_string() == want);
+        if !names_sink {
+            if let Some(source) = graph
+                .sources
+                .iter()
+                .find(|s| s.name == want || s.description == want || s.id.to_string() == want)
+            {
+                let mut ports: Vec<&str> = graph
+                    .source_ports
+                    .iter()
+                    .filter(|(id, _)| *id == source.id)
+                    .map(|(_, name)| name.as_str())
+                    .collect();
+                ports.sort_unstable();
+                let pick = |suffix: &str| {
+                    ports
+                        .iter()
+                        .find(|p| p.ends_with(suffix))
+                        .map(|p| format!("{}:{p}", source.name))
+                };
+                let mono = pick("_MONO");
+                let left = pick("_FL").or_else(|| mono.clone());
+                let right = pick("_FR").or(mono);
+                return Ok(CaptureTarget::Source {
+                    node: source.clone(),
+                    left,
+                    right,
+                });
+            }
+        }
+    }
+    let (sink, left, right) = resolve_monitor_in(&graph, endpoint)?;
+    Ok(CaptureTarget::Monitor { sink, left, right })
+}
+
+/// One capturable node in the PipeWire graph, for device pickers.
+#[derive(Debug, Clone)]
+pub struct CaptureDevice {
+    pub kind: &'static str,
+    pub name: String,
+    pub description: String,
+}
+
+/// List every capturable node: sinks (captured through their monitor) and
+/// sources (captured directly). Used by the CLI and the settings picker.
+pub fn list_capture_devices() -> Result<Vec<CaptureDevice>> {
+    let graph = load_graph()?;
+    Ok(graph
+        .sinks
+        .iter()
+        .map(|s| CaptureDevice {
+            kind: "sink",
+            name: s.name.clone(),
+            description: s.description.clone(),
+        })
+        .chain(graph.sources.iter().map(|s| CaptureDevice {
+            kind: "source",
+            name: s.name.clone(),
+            description: s.description.clone(),
+        }))
+        .collect())
 }
 
 fn node_present(node: &str) -> bool {
@@ -309,11 +414,23 @@ fn spawn_capture(endpoint: Option<String>, node: String) -> Result<(Child, Backe
         .status();
     match probe {
         Ok(status) if status.success() => {
-            let (_, monitor_fl, monitor_fr) = resolve_monitor(endpoint.as_deref())?;
+            let target = resolve_target(endpoint.as_deref())?;
+            // Monitor capture and named-port source capture spawn unlinked
+            // (--target 0) and link explicitly; a source without named
+            // ports is targeted directly and the session manager links it.
+            let (target_arg, links): (String, Vec<String>) = match &target {
+                CaptureTarget::Monitor { left, right, .. } => {
+                    ("0".to_string(), vec![left.clone(), right.clone()])
+                }
+                CaptureTarget::Source { node, left, right } => match (left, right) {
+                    (Some(l), Some(r)) => ("0".to_string(), vec![l.clone(), r.clone()]),
+                    _ => (node.id.to_string(), Vec::new()),
+                },
+            };
             let mut child = Command::new(helper("pw-record"))
                 .args([
                     OsStr::new("--target"),
-                    OsStr::new("0"),
+                    OsStr::new(&target_arg),
                     OsStr::new("--format"),
                     OsStr::new("s16"),
                     OsStr::new("--rate"),
@@ -337,9 +454,12 @@ fn spawn_capture(endpoint: Option<String>, node: String) -> Result<(Child, Backe
             if let Ok(Some(status)) = child.try_wait() {
                 anyhow::bail!("pw-record exited immediately (status {status})");
             }
-            link_ports(&[&monitor_fl, &monitor_fr], &node).inspect_err(|_| {
-                let _ = child.kill();
-            })?;
+            if !links.is_empty() {
+                let ports: Vec<&str> = links.iter().map(String::as_str).collect();
+                link_ports(&ports, &node).inspect_err(|_| {
+                    let _ = child.kill();
+                })?;
+            }
             Ok((child, Backend::PipeWire))
         }
         _ => spawn_parec(endpoint),
@@ -347,8 +467,14 @@ fn spawn_capture(endpoint: Option<String>, node: String) -> Result<(Child, Backe
 }
 
 fn spawn_parec(endpoint: Option<String>) -> Result<(Child, Backend)> {
-    let monitor = match endpoint.filter(|s| !s.is_empty()) {
-        Some(name) => name,
+    let device = match endpoint.filter(|s| !s.is_empty()) {
+        Some(want) => match resolve_target(Some(&want)) {
+            Ok(CaptureTarget::Monitor { sink, .. }) => format!("{sink}.monitor"),
+            Ok(CaptureTarget::Source { node, .. }) => node.name,
+            // No PipeWire graph (PulseAudio-only host): the endpoint is
+            // already a Pulse source name.
+            Err(_) => want,
+        },
         None => {
             let output = run_helper("pactl", &["get-default-sink"])?;
             ensure!(output.status.success(), "pactl cannot find the default sink");
@@ -358,7 +484,7 @@ fn spawn_parec(endpoint: Option<String>) -> Result<(Child, Backend)> {
     let child = Command::new(helper("parec"))
         .args([
             OsStr::new("--device"),
-            OsStr::new(&monitor),
+            OsStr::new(&device),
             OsStr::new("--format=s16le"),
             OsStr::new(&format!("--rate={NATIVE_RATE}")),
             OsStr::new("--channels=2"),
@@ -775,6 +901,13 @@ pub(crate) mod tests {
              "info": {"props": {"node.id": 8, "port.direction": "out", "port.name": "monitor_FL"}}},
             {"id": 74, "type": "PipeWire:Interface:Port",
              "info": {"props": {"node.id": 8, "port.direction": "out", "port.name": "monitor_FR"}}},
+            {"id": 9, "type": "PipeWire:Interface:Node",
+             "info": {"props": {"node.name": "fake-mic", "media.class": "Audio/Source",
+                                "node.description": "Fake Microphone"}}},
+            {"id": 75, "type": "PipeWire:Interface:Port",
+             "info": {"props": {"node.id": 9, "port.direction": "out", "port.name": "capture_FL"}}},
+            {"id": 76, "type": "PipeWire:Interface:Port",
+             "info": {"props": {"node.id": 9, "port.direction": "out", "port.name": "capture_FR"}}},
         ]);
         std::fs::write(dir.join("pw-dump"), format!("#!/bin/sh\ncat <<'EOF'\n{graph}\nEOF\n")).unwrap();
         std::fs::write(
@@ -823,14 +956,80 @@ pub(crate) mod tests {
         let dir = fake_bin("graph", true, true);
         unsafe { std::env::set_var("AIRFLASH_HELPER_DIR", &dir) };
         unsafe { std::env::set_var("AIRFLASH_CAPTURE_NO_LINK", "1") };
-        let (sink, left, right) = resolve_monitor(None).unwrap();
+        let graph = load_graph().unwrap();
+        let (sink, left, right) = resolve_monitor_in(&graph, None).unwrap();
         assert_eq!(
             (sink.as_str(), left.as_str(), right.as_str()),
             ("fake-sink", "fake-sink:monitor_FL", "fake-sink:monitor_FR")
         );
-        let (sink, _, _) = resolve_monitor(Some("Other Sink")).unwrap();
+        let (sink, _, _) = resolve_monitor_in(&graph, Some("Other Sink")).unwrap();
         assert_eq!(sink, "other-sink");
-        assert!(resolve_monitor(Some("missing")).is_err());
+        assert!(resolve_monitor_in(&graph, Some("missing")).is_err());
+        unsafe { std::env::remove_var("AIRFLASH_HELPER_DIR") };
+        unsafe { std::env::remove_var("AIRFLASH_CAPTURE_NO_LINK") };
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn target_resolution_distinguishes_sinks_and_sources() {
+        let _guard = env_guard();
+        let dir = fake_bin("targets", true, true);
+        unsafe { std::env::set_var("AIRFLASH_HELPER_DIR", &dir) };
+        match resolve_target(Some("Fake Microphone")).unwrap() {
+            CaptureTarget::Source { node, left, right } => {
+                assert_eq!(node.name, "fake-mic");
+                assert_eq!(left.as_deref(), Some("fake-mic:capture_FL"));
+                assert_eq!(right.as_deref(), Some("fake-mic:capture_FR"));
+            }
+            other => panic!("expected a source target, got {other:?}"),
+        }
+        match resolve_target(Some("Other Sink")).unwrap() {
+            CaptureTarget::Monitor { sink, .. } => assert_eq!(sink, "other-sink"),
+            other => panic!("expected a monitor target, got {other:?}"),
+        }
+        assert!(resolve_target(Some("missing")).is_err());
+        let devices = list_capture_devices().unwrap();
+        assert_eq!(devices.len(), 3);
+        assert!(devices.iter().any(|d| d.kind == "source" && d.name == "fake-mic"));
+        unsafe { std::env::remove_var("AIRFLASH_HELPER_DIR") };
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn pipewire_source_capture_streams_non_silent_audio() {
+        let _guard = env_guard();
+        let dir = fake_bin("srccapture", true, true);
+        unsafe { std::env::set_var("AIRFLASH_HELPER_DIR", &dir) };
+        unsafe { std::env::set_var("AIRFLASH_CAPTURE_NO_LINK", "1") };
+        let source = Loopback::start(Some("fake-mic".to_string()), crate::rtp::RATE, control()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !source.ready().unwrap() {
+            assert!(Instant::now() < deadline, "source capture never became ready");
+            thread::sleep(Duration::from_millis(5));
+        }
+        let (pcm, _) = source.packet(1.0).unwrap();
+        assert!(pcm.iter().any(|b| *b != 0), "source capture emitted silence");
+        drop(source);
+        unsafe { std::env::remove_var("AIRFLASH_HELPER_DIR") };
+        unsafe { std::env::remove_var("AIRFLASH_CAPTURE_NO_LINK") };
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn pulse_source_capture_streams_non_silent_audio() {
+        let _guard = env_guard();
+        let dir = fake_bin("pulsesrc", false, true);
+        unsafe { std::env::set_var("AIRFLASH_HELPER_DIR", &dir) };
+        unsafe { std::env::set_var("AIRFLASH_CAPTURE_NO_LINK", "1") };
+        let source = Loopback::start(Some("Fake Microphone".to_string()), crate::rtp::RATE, control()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !source.ready().unwrap() {
+            assert!(Instant::now() < deadline, "pulse source capture never became ready");
+            thread::sleep(Duration::from_millis(5));
+        }
+        let (pcm, _) = source.packet(1.0).unwrap();
+        assert!(pcm.iter().any(|b| *b != 0), "pulse source capture emitted silence");
+        drop(source);
         unsafe { std::env::remove_var("AIRFLASH_HELPER_DIR") };
         unsafe { std::env::remove_var("AIRFLASH_CAPTURE_NO_LINK") };
         std::fs::remove_dir_all(&dir).ok();

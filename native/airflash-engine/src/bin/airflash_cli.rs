@@ -29,6 +29,7 @@ airflash-cli - headless AirPlay 2 sender control
 
 usage:
   airflash-cli discover [--timeout-ms N] [--json] [--service airplay|raop|all]
+  airflash-cli devices [--json]
   airflash-cli start --host IP [--port N] [--source file|simulated|loopback]
                     [--wav PATH] [--rate N] [--latency-ms N] [--gain F]
                     [--timing ptp|ntp|auto] [--codec alac|pcm|auto] [--monitor NAME]
@@ -46,6 +47,11 @@ usage:
 Without --daemon, `start` runs in the foreground and prints one JSON event per
 line (journal-friendly). With --daemon it detaches, logs to the session log and
 returns once the session is streaming.
+
+For `start --source loopback`, `--monitor NAME` picks the capture device
+(see `devices`): a sink is recorded through its monitor, while a source —
+a microphone, a USB audio input, a Bluetooth A2DP source — is recorded
+directly. Without it, the default sink's monitor is recorded.
 
 environment:
   AIRFLASH_RUNTIME_DIR   state/log/control-socket directory
@@ -107,6 +113,7 @@ fn run(args: &[String]) -> Result<u8> {
             Ok(0)
         }
         "discover" => discover(rest),
+        "devices" => devices(rest),
         "start" => start(rest),
         "stop" => stop(rest),
         "status" => status(rest),
@@ -351,6 +358,34 @@ fn build_options(settings: &SessionSettings) -> Result<ProbeOptions> {
     };
     options.validate_start()?;
     Ok(options)
+}
+
+fn devices(args: &[String]) -> Result<u8> {
+    let mut json = false;
+    for arg in args {
+        match arg.as_str() {
+            "--json" => json = true,
+            other => bail!("usage: unknown option '{other}' for devices"),
+        }
+    }
+    let found = airflash_engine::live::list_capture_devices().context("list capture devices")?;
+    if json {
+        let items: Vec<Value> = found
+            .iter()
+            .map(|d| json!({"kind": d.kind, "name": d.name, "description": d.description}))
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&items)?);
+    } else {
+        for d in &found {
+            let label = if d.description.is_empty() {
+                d.name.as_str()
+            } else {
+                d.description.as_str()
+            };
+            println!("{}\t{}\t{}", d.kind, d.name, label);
+        }
+    }
+    Ok(0)
 }
 
 fn discover(args: &[String]) -> Result<u8> {
