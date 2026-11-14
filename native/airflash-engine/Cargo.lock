@@ -34,6 +34,7 @@ dependencies = [
  "subtle",
  "uuid",
  "windows",
+ "windows-core",
  "x25519-dalek",
  "zeroize",
 ]

@@ -1,6 +1,18 @@
 # Native AirPlay engine
 
-Windows-only Rust sidecar; JSONL v1 on stdin/stdout. Diagnostics must not contain keys or PINs. Python UI commands use `start` (live WASAPI); finite tests use `probe` (<=5000ms, gain<=0.1,
+Windows-only Rust sidecar; JSONL v1 on stdin/stdout. Diagnostics must not contain keys or PINs.
+`hello.capabilities` includes `adaptive_lead_v2`. Adaptive live starts accept
+`adaptive_latency: true` and `adaptive_initial_latency_ms` (0–2000); recovery
+rebuilds honor the raised request above a receiver minimum, while standby resets
+to the initial target. Fixed/forced starts retain their negotiation policies.
+`set_lead` accepts extra `ms`, a positive `sequence`, and the current
+`session_epoch`. `lead_requested` only accepts the command; `lead_changed` and
+`transport_metrics` confirm `lead_sequence`, `baseline_ms`, `lead_extra_ms`,
+`effective_latency_ms`, `lead_ceiling_ms`, and `live_lead_supported` for that epoch.
+No-ops and clamps report the actual result. Extra lead is bounded to 100 ms and a
+2000 ms total, and changes the playback mapping and packet expiry without shifting
+sender pacing. `playout_ms` additionally includes group alignment offsets.
+Desktop/validation commands use `start` (live WASAPI); finite tests use `probe` (<=5000ms, gain<=0.1,
 440Hz WAV peak<=0.05). EOF cancels all owned work. `stop` and gain changes apply only to the
 matching session. `pair` emits `pin_required`; `pair_pin` completes pairing, validates the
 accessory signature and writes version-1, user-bound DPAPI credentials. Old pyatv credentials
@@ -11,8 +23,9 @@ Live `start` accepts optional `equalizer` settings (`enabled`, `preamp_db`, ten
 same settings plus a positive increasing `sequence` for the matching live session;
 `equalizer_changed` reports automatic attenuation and effective preamp, and
 `equalizer_error` rejects invalid changes without ending playback. Gains must be
-finite and within -12..12 dB. Finite probes reject enabled EQ. Both stereo members
-receive the same PCM after resampling, EQ, and master gain. Updates crossfade over
+finite and within -12..12 dB. Finite probes reject enabled EQ. Native stereo members
+receive the same PCM after resampling, EQ, and master gain; software members map it
+to `[L,L]` / `[R,R]`. EQ updates crossfade over
 20 ms with no additional buffering.
 
 Build with `scripts/build-native.ps1 -Check`. The ignored `soak` test runs two localhost UDP
@@ -22,7 +35,7 @@ RTSP fragmentation/bounds/cancellation, sequence wrap and independent ALAC decod
 
 Protocol references (wire fields/behavior, not linked protocol implementations):
 - HAP and AirPlay observations in postlund/pyatv (MIT).
-- AirPlay PTP profile documented by owntime/libairptp (MIT).
+- AirPlay PTP profile documented by owntone/libairptp (MIT).
 - Apple ALAC codec format via alac-encoder (MIT OR Apache-2.0).
 - IEEE 1588 message layouts and RTP sequence/time semantics.
 
@@ -30,62 +43,39 @@ Foundation libraries: RustCrypto sha2/hkdf/ChaCha20-Poly1305, dalek Ed25519/X255
 num-bigint (SRP arithmetic), Rubato (resampling), alac-encoder, windows-rs.
 The code contains no dependency on a third-party complete AirPlay sender.
 
-Limitations: first-device scope is a single native HomePod stereo pair, Windows x64, stereo PCM.
-ALAC and persistent pairing have independent/simulated tests; hardware qualification covers
-PCM transient authentication. No cross-model 200ms guarantee. The PTP implementation is
-an AirPlay unicast master, not a general-purpose IEEE 1588 daemon or full BMCA implementation.
+Optional peer profiles select PCM/ALAC, realtime UDP or type-103 buffered TCP, and PTP/NTP.
+Known format tables prefer ALAC in auto mode; forced profiles never silently fall back.
+`hello` advertises `receiver_capabilities`. The read-only `get_receiver_capabilities`
+command accepts one or two `peers` with `receiver_id`, host, port, codec hints, and
+clock evidence. It reads `/info` and returns the supported request combinations and
+their predicted selections using playback's negotiation rules, without pairing or
+starting capture. `negotiated` events include `receiver_id`, port, and `clock_role`
+(`sender`, `follow`, or `ntp`) so the desktop can display each member's actual result.
+TCP frames retain partial writes in a bounded queue and use SETRATEANCHORTIME. The fixed
+sample timeline fills bounded valid gaps with encoded silence or rebuilds after expiry.
+WASAPI discontinuities clear stale queues/resampler state; shared continuity transitions
+and gain ramps take about 5 ms. MMCSS status and per-peer clock exchanges are diagnostic events.
+Password SRP uses a separate user-bound DPAPI store. Native groups keep unified hardware
+volume; software groups read and write each hardware volume independently.
 
-## Headless CLI (`airflash-cli`, Linux)
+Scope: Windows x64, 16-bit 44.1/48 kHz, one receiver or exactly two native/software members.
+New transport/clock/password combinations and mixed-brand groups are experimental and
+have simulated qualification only. No new hardware/acoustic qualification was performed.
+There is no cross-model latency or microsecond acoustic synchronization guarantee. PTP
+supports bounded AirPlay unicast master/follower modes, without full BMCA. See
+[schema v4, IPC examples and acceptance boundaries](../../docs/audio-stereo-v3.md).
 
-The crate contains a second, feature-gated binary for non-interactive, headless use:
+Live capture accepts `source: "loopback"` (optional `capture_endpoint`) or
+`source: "application"` with `capture_application_path` and optional runtime-only
+`capture_process_id` / `capture_process_started_at` supplied together. `hello.capabilities` reports
+`application_capture` (build >=20348) and `standby_release`. `list_applications`
+returns executable path, process ID, creation FILETIME and display name, grouping
+same-executable child processes under their root. Paths persist; PID hints do not.
 
-```bash
-cargo build --release --features cli --manifest-path Cargo.toml
-```
-
-- `discover` browses `_airplay._tcp.local` / `_raop._tcp.local` over mDNS. `discovery.rs`
-  is a self-contained PTR/SRV/A/TXT parser (with compression pointers) plus a small UDP
-  transport; no third-party DNS-SD stack is used.
-- `start` runs a session in the foreground (one JSON event per line) or detached with
-  `--daemon`. Background runs need no tty, no desktop and no service manager: state,
-  log and the control socket live under `AIRFLASH_RUNTIME_DIR` (default
-  `$XDG_RUNTIME_DIR/airflash`, else `~/.local/state/airflash`).
-- `stop`, `status`, `logs`, `volume` and `gain` talk to the running daemon through a Unix
-  socket. `stop` sends SIGTERM, which the daemon turns into a graceful RTSP teardown.
-- `pair` performs HAP pairing and stores version-1 credentials for the current user
-  (`credentials_unix.rs`, mode 0600, hashed file names).
-
-The daemon reuses `session::probe_with_controls`; it contains no protocol code of its own.
-
-### Audio sources
-
-`--source` selects the capture backend:
-
-| Value | Backend | Platform |
-| --- | --- | --- |
-| `loopback` | system audio capture | Windows (WASAPI). On Linux it fails explicitly: PipeWire/PulseAudio capture is not implemented yet. |
-| `file` | loops a WAV file, resampled to the streaming rate | all (`source.rs`) |
-| `simulated` | deterministic test signal, reproducible output | all (`source.rs`) |
-
-`source.rs` mirrors the Windows loopback queue contract (bounded queue, underrun silence,
-scheduler recovery, equalizer before master gain, capture metrics), so file and simulated
-captures feed the same transport path and report the same metrics as a real capture.
-
-### Desktop frontend
-
-`desktop/AirFlash.UI` is the Avalonia port of the Windows panel. It reuses
-`AirFlash.Core` (session, settings, receivers) and discovers receivers through
-`airflash-cli discover --json`, so the Rust mDNS implementation is the only one
-in the tree. See `docs/LINUX.md`.
-
-### Tests
-
-```bash
-cargo test --features cli          # adds the headless CLI lifecycle suite
-cargo clippy --all-targets --features cli -- -D warnings
-```
-
-`tests/headless_cli.rs` drives the CLI against a simulated AirPlay receiver (SRP, HAP,
-SETUP/RECORD/TEARDOWN, UDP media) and covers daemon start, streaming, control commands,
-graceful stop, failure without orphans, SIGTERM, config files and argument validation. It
-never contacts a real speaker.
+`start.standby` and `set_standby` accept `{ "enabled": false, "silence_seconds": 10 }`
+with a finite duration in 5..300 seconds. These options are unavailable to finite
+probes. After silence, all receiver, feedback and timing resources are dropped
+while WASAPI and periodic IPC metrics remain active. `standby` gives a reason of
+`silence`, `application_unavailable` or `application_ambiguous`; `resuming` precedes
+a fresh transport and `streaming`. Intentional standby never emits `stopped`.
+Gain/EQ/device-volume controls retain their latest state across transport rebuilds.

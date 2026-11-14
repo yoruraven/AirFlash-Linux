@@ -12,12 +12,32 @@ public sealed record Receiver(string Id, string Name, string Address, int Port =
     public bool Online { get; init; } = true;
     public Receiver[] Members { get; init; } = [];
     public byte[] Codecs { get; init; } = [];
+    public ulong? Features { get; init; }
+    /// <summary>TXT <c>srcvers</c>, kept verbatim for capability evidence and diagnostics.</summary>
+    public string SourceVersion { get; init; } = "";
+    public bool RequiresPassword { get; init; }
+    public bool FollowReceiverClock { get; init; }
+    public bool IsSoftwareGroup { get; init; }
+    public string Channel { get; init; } = "stereo";
+    public int SyncOffsetMs { get; init; }
     public string[] Aliases { get; init; } = [];
-    public bool IsGroup => Members.Length > 0 || Id.StartsWith("stereo:", StringComparison.Ordinal);
-    public bool Complete => !IsGroup || Members.Length == 2;
-    public string Detail => IsGroup ? L.Format("HomePod stereo · {0}/2", Members.Length) : Model.Length > 0 ? Model : L.Get("AirFlash receiver");
+    public bool IsGroup => IsSoftwareGroup || Members.Length > 0 || Id.StartsWith("stereo:", StringComparison.Ordinal);
+    public bool Complete => !IsGroup || Members.Length == 2 && Members.All(m => m.Online && !m.IsGroup && (!IsSoftwareGroup || m.StereoId.Length == 0));
+    /// <summary>TXT-only four-state label; missing features never become classic.</summary>
+    public AirPlayCapability Support => AirPlayCapabilityClassifier.Classify(Features, SourceVersion);
+    /// <summary>WAC's routing predicate: TXT bit 40 and <c>srcvers &gt;= 354.54.6</c>.</summary>
+    public bool SupportsAirPlay2 => AirPlayRouting.SupportsAirPlay2(Features, SourceVersion);
+    private string CapabilityDetail => Support switch
+    {
+        AirPlayCapability.AirPlay2 => L.Get("AirPlay 2"),
+        AirPlayCapability.NotAirPlay2 => L.Get("Classic AirPlay only"),
+        AirPlayCapability.ClaimsAirPlay2Outdated => L.Get("AirPlay 2 claimed, firmware too old"),
+        _ => L.Get("AirPlay 2 support unknown")
+    };
+    private string BaseDetail => Model.Length > 0 ? Model : L.Get("AirFlash receiver");
+    public string Detail => IsSoftwareGroup ? L.Get("Software stereo · experimental") : IsGroup ? L.Format("HomePod stereo · {0}/2", Members.Length) : $"{BaseDetail} · {CapabilityDetail}";
     [JsonIgnore] public IEnumerable<Receiver> Peers => IsGroup ? Members : [this];
-    public string TransportKey => string.Join(";", Peers.OrderBy(p => p.Address, StringComparer.Ordinal).ThenBy(p => p.Port).Select(p => $"{p.Address}:{p.Port}:{(IsGroup && p.IsLeader)}"));
+    public string TransportKey => string.Join(";", Peers.OrderBy(p => p.Address, StringComparer.Ordinal).ThenBy(p => p.Port).Select(p => $"{p.Address}:{p.Port}:{(IsGroup && p.IsLeader)}:{p.Channel}:{p.SyncOffsetMs}"));
     public static string PhysicalKey(string identity, string address) => string.IsNullOrWhiteSpace(identity) ? address : ReceiverIdentity.Normalize(identity);
     public static Receiver Offline(string id) => ReceiverIdentity.TryEndpoint(id, out var address, out var port)
         ? new(id, L.Get("Offline receiver"), address, port) { Online = false }
@@ -65,7 +85,11 @@ public static class ReceiverAggregator
                 GroupName = Field(group, "gpn"),
                 IsLeader = Field(group, "igl") == "1",
                 Aliases = aliases,
-                Codecs = codecText.Split(',').Select(x => byte.TryParse(x, out var value) ? (byte?)value : null).OfType<byte>().ToArray()
+                Codecs = codecText.Split(',').Select(x => byte.TryParse(x, out var value) ? (byte?)value : null).OfType<byte>().ToArray(),
+                Features = ParseFeatures(Field(group, "features") is { Length: > 0 } features ? features : Field(group, "ft")),
+                SourceVersion = Field(group, "srcvers"),
+                RequiresPassword = Field(group, "pw").Equals("true", StringComparison.OrdinalIgnoreCase),
+                FollowReceiverClock = Model(service).StartsWith("AudioAccessory", StringComparison.Ordinal) && Field(group, "igl") == "1" && Field(group, "tsid").Length == 0 && Field(group, "pgid").Length == 0 && int.TryParse(Field(group, "osvers").Split('.')[0], out var os) && os >= 27
             };
         }).ToArray();
         // Conflicting unidentified services at one endpoint still need independent catalog keys.
@@ -90,6 +114,19 @@ public static class ReceiverAggregator
         var at = service.Instance.IndexOf('@');
         return service.ServiceType.StartsWith("_raop", StringComparison.Ordinal) && at > 0 ? service.Instance[..at].Trim() : "";
     }
+    public static ulong? ParseFeatures(string value)
+    {
+        var parts = value.Split(',');
+        if (parts.Length is < 1 or > 2) return null;
+        ulong mask = 0;
+        for (var i = 0; i < parts.Length; i++)
+        {
+            var part = parts[i].Trim(); if (part.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) part = part[2..];
+            if (!uint.TryParse(part, System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out var bits)) return null;
+            mask |= (ulong)bits << (i * 32);
+        }
+        return mask;
+    }
     private static bool IsAirplay(ServiceRecord service) => service.ServiceType.StartsWith("_airplay", StringComparison.Ordinal);
     private static IOrderedEnumerable<ServiceRecord> OrderServices(IEnumerable<ServiceRecord> services) => services.OrderBy(s => IsAirplay(s) ? 0 : 1)
         .ThenBy(s => s.Instance, StringComparer.Ordinal).ThenBy(s => s.Address, StringComparer.Ordinal).ThenBy(s => s.Port);
@@ -106,7 +143,11 @@ public static class ReceiverAggregator
     private static bool Matches(string left, string right, StringComparison comparison = StringComparison.Ordinal) => left.Length == 0 || right.Length == 0 || left.Equals(right, comparison);
     private static string Describe(ServiceRecord service) => System.Text.Json.JsonSerializer.Serialize(new { service.Instance, service.ServiceType, service.Address, service.Port, DeviceId = Identity(service), Model = Model(service), StereoId = Field([service], "tsid") });
 }
-public sealed record AudioEndpoint(string Id, string Name);
+public enum AudioEndpointKind { Playback, Recording }
+public sealed record AudioEndpoint(string Id, string Name, AudioEndpointKind Kind = AudioEndpointKind.Playback)
+{
+    public string DisplayName => $"{Name} · {L.Get(Kind == AudioEndpointKind.Recording ? "Recording" : "Playback")}";
+}
 public sealed record DiscoveryAdapter(string Id, string Name, string Description, string Ipv4Addresses, bool IsUp, uint InterfaceIndex)
 {
     public bool Available => IsUp && InterfaceIndex != 0 && Ipv4Addresses.Length > 0;
@@ -126,7 +167,9 @@ public interface IDiscoveryService : IDisposable
 {
     event Action<IReadOnlyList<Receiver>>? Changed;
     event Action<string>? Failed;
+    event Action<bool>? RunningChanged;
     void Start();
+    void Stop();
     void SetInterface(string id);
 }
 public interface IAudioService

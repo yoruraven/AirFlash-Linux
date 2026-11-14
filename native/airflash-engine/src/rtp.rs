@@ -34,6 +34,7 @@ pub struct Packetizer {
     pub timestamp: u32,
     pub ssrc: u32,
     pub rate: u32,
+    payload_type: u8,
     cipher: Cipher,
     history: VecDeque<CachedPacket>,
     retention: Duration,
@@ -50,6 +51,7 @@ impl Packetizer {
             timestamp,
             ssrc,
             rate,
+            payload_type: 96,
             cipher: Cipher::new(key),
             history: VecDeque::with_capacity(MAX_HISTORY),
             retention: Duration::from_secs(1),
@@ -62,6 +64,9 @@ impl Packetizer {
             &alac_encoder::FormatDescription::alac(self.rate as f64, FRAMES as u32, 2),
         )));
     }
+    pub fn enable_buffered(&mut self) {
+        self.payload_type = 103;
+    }
     pub fn packet(&mut self, pcm: &[u8], first: bool) -> Result<Vec<u8>> {
         let now = Instant::now();
         self.packet_at(pcm, first, now, now + self.latency)
@@ -69,6 +74,20 @@ impl Packetizer {
     pub fn configure_latency(&mut self, latency: Duration) {
         self.latency = latency;
         self.retention = Duration::from_secs(1).max(latency + Duration::from_millis(250));
+    }
+    /// Already sent packets follow the same retimed playback anchor as new ones.
+    /// Their encrypted bytes and RTP identity remain unchanged.
+    pub fn shift_playout(&mut self, delta_us: i64, extra: Duration) {
+        let delta = Duration::from_micros(delta_us.unsigned_abs());
+        for packet in &mut self.history {
+            packet.deadline = if delta_us >= 0 {
+                packet.deadline + delta
+            } else {
+                packet.deadline.checked_sub(delta).unwrap_or(packet.sent_at)
+            };
+        }
+        self.retention =
+            Duration::from_secs(1).max(self.latency + extra + Duration::from_millis(250));
     }
     /// Deliberately lost media slots advance RTP, but never reuse an encryption nonce.
     pub fn skip_packets(&mut self, count: u64) {
@@ -85,7 +104,7 @@ impl Packetizer {
         deadline: Instant,
     ) -> Result<Vec<u8>> {
         ensure!(pcm.len() == PCM_BYTES, "wrong PCM packet length");
-        let mut out = vec![0x80, if first { 0xe0 } else { 0x60 }];
+        let mut out = vec![0x80, self.payload_type | if first { 0x80 } else { 0 }];
         out.extend(self.seq.to_be_bytes());
         out.extend(self.timestamp.to_be_bytes());
         out.extend(self.ssrc.to_be_bytes());
@@ -231,11 +250,57 @@ mod tests {
         assert_eq!(&p[4..8], &20000u32.to_be_bytes());
         assert_eq!(&p[20..], &456u64.to_be_bytes());
     }
+    #[test]
+    fn retiming_extends_cached_packet_expiry_without_reencrypting() {
+        let mut sender = Packetizer::new([7; 32], 100, 200, 1);
+        sender.configure_latency(Duration::from_millis(120));
+        let start = Instant::now();
+        let bytes = sender
+            .packet_at(
+                &vec![0; PCM_BYTES],
+                true,
+                start,
+                start + Duration::from_millis(120),
+            )
+            .unwrap();
+        let later = start + Duration::from_millis(130);
+        assert!(matches!(
+            sender.retransmit_packet(100, later),
+            Retransmit::Expired
+        ));
+        sender.shift_playout(20_000, Duration::from_millis(20));
+        let Retransmit::Packet(reply) = sender.retransmit_packet(100, later) else {
+            panic!("raised headroom must extend the old packet too")
+        };
+        assert_eq!(&reply[4..], &bytes);
+        assert_eq!(sender.seq, 101);
+        assert_eq!(sender.timestamp, 200 + FRAMES as u32);
+        assert!(matches!(
+            sender.retransmit_packet(100, start + Duration::from_millis(140)),
+            Retransmit::Expired
+        ));
+    }
 }
 
 #[cfg(test)]
 mod codec_tests {
     use super::*;
+    #[test]
+    fn buffered_nonce_counter_does_not_wrap_with_rtp_sequence() {
+        let mut sender = Packetizer::with_rate([17; 32], 65535, u32::MAX - 351, 13, 48000);
+        sender.enable_alac();
+        sender.enable_buffered();
+        let pcm = vec![0; PCM_BYTES];
+        for i in 0..65538u64 {
+            let packet = sender.packet(&pcm, i == 0).unwrap();
+            assert_eq!(packet[1] & 127, 103);
+            assert_eq!(
+                u64::from_le_bytes(packet[packet.len() - 8..].try_into().unwrap()),
+                i
+            );
+        }
+        assert_eq!(sender.seq, 1); // 65535 + 65538 modulo 2^16
+    }
     #[test]
     fn alac_decodes_bit_exact_with_independent_decoder() {
         for rate in SUPPORTED_RATES {

@@ -1,0 +1,600 @@
+use super::*;
+
+fn follower(now: Instant) -> PeerState {
+    let mut state = PeerState {
+        follow: true,
+        active: true,
+        ..Default::default()
+    };
+    followed_packet(&mut state, &announce(8, 0, 0), 0, now, 7);
+    state
+}
+#[test]
+fn a_sync_only_mapping_freezes_expires_and_never_survives_an_identity_change() {
+    let start = Instant::now();
+    let mut state = follower(start);
+    for seq in 0..3u16 {
+        let at = start + Duration::from_millis(u64::from(seq) * 125);
+        let local = 1_000_000_000 + u64::from(seq) * 125_000_000;
+        let (sync, follow) = sync_pair(8, seq, local + 5_000_000_000);
+        followed_packet(&mut state, &sync, local + 90_000, at, 7);
+        followed_packet(&mut state, &follow, local + 95_000, at, 7);
+    }
+    let last = start + Duration::from_millis(250);
+    assert!(state.offset_at.is_none(), "no Delay response was needed");
+    let (offset, frozen) = state.map_offset(last, Duration::from_secs(10)).unwrap();
+    assert!(!frozen);
+    assert_eq!(
+        state.map_offset(last + Duration::from_secs(3), Duration::from_secs(10)),
+        Some((offset, true))
+    );
+    assert_eq!(
+        state.map_offset(last + Duration::from_secs(11), Duration::from_secs(10)),
+        None
+    );
+    followed_packet(
+        &mut state,
+        &announce(9, 1, 0),
+        0,
+        last + Duration::from_secs(4),
+        7,
+    );
+    assert_eq!(
+        state.map_offset(last + Duration::from_secs(4), Duration::from_secs(10)),
+        None
+    );
+}
+
+#[test]
+fn reordered_pairs_preserve_sample_correction_and_reach_readiness() {
+    let start = Instant::now();
+    let mut state = follower(start);
+    for seq in 0..3u16 {
+        let now = start + Duration::from_secs(u64::from(seq));
+        let base = 1_000_000_000 + u64::from(seq) * 1_000_000_000;
+        let (sync, follow) = sync_pair(8, seq, base + 1_000_000);
+        followed_packet(&mut state, &follow, base + 90_000, now, 7);
+        followed_packet(&mut state, &sync, base + 100_000, now, 7);
+        let mut unrelated_sync = sync_pair(8, seq + 100, base).0;
+        unrelated_sync[8..16].copy_from_slice(&(90_000_000i64 * 65536).to_be_bytes());
+        followed_packet(&mut state, &unrelated_sync, base + 150_000, now, 7);
+        state.delay = Some((seq, base + 200_000));
+        state.delay_age = Some(now);
+        let mut response = header(9, 54, 8, seq, 0x0408, 0);
+        timestamp(&mut response[34..44], base + 1_300_000);
+        response[44..52].copy_from_slice(&7u64.to_be_bytes());
+        response[52..54].copy_from_slice(&0x8005u16.to_be_bytes());
+        followed_packet(&mut state, &response, base + 400_000, now, 7);
+        followed_packet(&mut state, &response, base + 400_000, now, 7);
+        assert_eq!(state.exchanges, u64::from(seq) + 1);
+    }
+    assert!(state.ready(start + Duration::from_secs(2)));
+    assert_eq!(state.offset, Some(1_000_000.0));
+    assert_eq!(state.round_trip_ns, Some(200_000.0));
+}
+
+#[test]
+fn cache_handles_backlog_wrap_duplicates_expiry_and_identity_changes() {
+    let start = Instant::now();
+    let mut state = follower(start);
+    let (sync_a, follow_a) = sync_pair(8, u16::MAX, 1_000_000);
+    let (sync_b, follow_b) = sync_pair(8, 0, 2_000_000);
+    followed_packet(&mut state, &sync_a, 100_000, start, 7);
+    followed_packet(&mut state, &sync_b, 200_000, start, 7);
+    followed_packet(&mut state, &follow_b, 210_000, start, 7);
+    followed_packet(&mut state, &follow_a, 220_000, start, 7);
+    assert_eq!(state.sync_pair.unwrap().origin, 2_000_000);
+    followed_packet(&mut state, &sync_b, 300_000, start, 7);
+    followed_packet(&mut state, &follow_b, 310_000, start, 7);
+    assert_eq!(state.sync_pair.unwrap().received, 200_000);
+
+    let (sync_c, follow_c) = sync_pair(8, 1, 3_000_000);
+    followed_packet(&mut state, &sync_c, 400_000, start, 7);
+    followed_packet(&mut state, &follow_c, 410_000, start + SAMPLE_LIFETIME, 7);
+    assert_eq!(state.sync_pair.unwrap().origin, 2_000_000);
+    for seq in 2..100u16 {
+        followed_packet(
+            &mut state,
+            &sync_pair(8, seq, 0).0,
+            u64::from(seq),
+            start + SAMPLE_LIFETIME,
+            7,
+        );
+    }
+    assert_eq!(state.pending_syncs.len(), MAX_PENDING_SYNCS);
+    followed_packet(
+        &mut state,
+        &announce(9, 0, 0),
+        0,
+        start + SAMPLE_LIFETIME,
+        7,
+    );
+    assert!(state.pending_syncs.is_empty());
+    assert!(state.sync_pair.is_none());
+    followed_packet(&mut state, &follow_b, 0, start + SAMPLE_LIFETIME, 7);
+    assert_eq!(state.packets.last_rejection, Some("source_identity"));
+}
+
+#[test]
+fn a_changed_announce_identity_is_timestamped_once_per_restart() {
+    let start = Instant::now();
+    let mut state = follower(start);
+    // The first Announce established the identity and is not a change.
+    assert_eq!(state.identity_change_at(), None);
+    note_announce_identity(
+        &mut state,
+        &announce(9, 0, 0),
+        start + Duration::from_secs(1),
+    );
+    followed_packet(
+        &mut state,
+        &announce(9, 0, 0),
+        0,
+        start + Duration::from_secs(1),
+        7,
+    );
+    assert_eq!(
+        state.identity_change_at(),
+        Some(start + Duration::from_secs(1))
+    );
+    assert_eq!(state.identity_changes, 1);
+    // Repeating the same identity must not count again.
+    note_announce_identity(
+        &mut state,
+        &announce(9, 1, 0),
+        start + Duration::from_secs(2),
+    );
+    followed_packet(
+        &mut state,
+        &announce(9, 1, 0),
+        0,
+        start + Duration::from_secs(2),
+        7,
+    );
+    assert_eq!(
+        state.identity_change_at(),
+        Some(start + Duration::from_secs(1))
+    );
+    assert_eq!(state.identity_changes, 1);
+    // A second restart moves the timestamp.
+    note_announce_identity(
+        &mut state,
+        &announce(10, 0, 0),
+        start + Duration::from_secs(3),
+    );
+    assert_eq!(
+        state.identity_change_at(),
+        Some(start + Duration::from_secs(3))
+    );
+    assert_eq!(state.identity_changes, 2);
+}
+
+#[test]
+fn a_silent_peer_reports_when_its_association_stalled() {
+    let start = Instant::now();
+    let state = PeerState {
+        follow: true,
+        active: true,
+        last: Some(start),
+        exchange_interval: Some(Duration::from_secs(1)),
+        ..Default::default()
+    };
+    assert_eq!(state.stalled_at(start + Duration::from_millis(500)), None);
+    assert_eq!(
+        state.stalled_at(start + Duration::from_secs(3)),
+        Some(start),
+        "three missed 1 s exchanges is the same bounded timeout readiness uses"
+    );
+}
+
+#[test]
+fn new_unmatched_sync_cannot_refresh_an_expired_complete_sample() {
+    let start = Instant::now();
+    let mut state = follower(start);
+    let (sync, follow) = sync_pair(8, 1, 1_000_000);
+    followed_packet(&mut state, &sync, 100_000, start, 7);
+    followed_packet(&mut state, &follow, 110_000, start, 7);
+    let later = start + Duration::from_secs(3);
+    followed_packet(
+        &mut state,
+        &sync_pair(8, 2, 3_001_000_000).0,
+        3_000_100_000,
+        later,
+        7,
+    );
+    state.delay = Some((3, 3_000_200_000));
+    state.delay_age = Some(later);
+    let mut response = header(9, 54, 8, 3, 0x0408, 0);
+    timestamp(&mut response[34..44], 3_001_300_000);
+    response[44..52].copy_from_slice(&7u64.to_be_bytes());
+    response[52..54].copy_from_slice(&0x8005u16.to_be_bytes());
+    followed_packet(&mut state, &response, 3_000_400_000, later, 7);
+    // Only the first complete pair counts as an exchange; the later Sync has no
+    // matching Follow_Up and must not refresh or re-arm the sample.
+    assert_eq!(state.exchanges, 1);
+    assert_eq!(state.sync_pair.map(|sample| sample.received), Some(100_000));
+    assert_eq!(
+        state.packets.last_rejection,
+        Some("delay_identity_or_stale_sample")
+    );
+}
+
+#[test]
+fn short_retry_accepts_an_earlier_outstanding_grant_and_renews_short_leases() {
+    let start = Instant::now();
+    let mut state = follower(start);
+    for seq in [1, 2] {
+        state.subscriptions[0].push_back(Subscription {
+            sequence: seq,
+            interval: -3,
+            sent: start + Duration::from_millis(u64::from(seq - 1) * 500),
+        });
+    }
+    let mut request = subscription(7, Some((8, 0x8005)), 1, 0);
+    request[50..54].copy_from_slice(&6u32.to_be_bytes());
+    let grant = unicast_grants(&request, 8, 1).remove(0);
+    let now = start + Duration::from_millis(700);
+    followed_packet(&mut state, &grant, 0, now, 7);
+    assert_eq!(state.received_grants, 1);
+    state.offset = Some(0.0);
+    state.offset_at = Some(start);
+    for millis in [0, 125, 250] {
+        state.exchanged(start + Duration::from_millis(millis));
+    }
+    assert!(!state.subscription_needed(0, now));
+    assert!(state.subscription_needed(0, now + Duration::from_secs(1)));
+    state.next_subscription = Some(now + SUBSCRIPTION_RETRY);
+    assert!(!state.subscription_due(now));
+    assert!(state.subscription_due(now + SUBSCRIPTION_RETRY));
+}
+
+#[test]
+fn advertised_slow_exchange_streak_expires_with_a_bounded_timeout() {
+    let start = Instant::now();
+    let mut state = PeerState {
+        exchange_interval: Some(Duration::from_secs(4)),
+        ..Default::default()
+    };
+    for seconds in [0, 4, 8] {
+        state.exchanged(start + Duration::from_secs(seconds));
+    }
+    assert!(state.ready(start + Duration::from_secs(8)));
+    assert_eq!(state.startup_timeout(), Duration::from_secs(14));
+    assert!(!state.ready(start + Duration::from_secs(20)));
+    state.exchanged(start + Duration::from_secs(20));
+    assert_eq!(state.exchanges, 1);
+}
+
+#[test]
+fn packet_validation_explains_rejections_without_relaxing_identity_checks() {
+    for (index, value, reason) in [
+        (0, 0, "profile_or_version"),
+        (1, 1, "profile_or_version"),
+        (4, 1, "domain"),
+        (3, 40, "length"),
+    ] {
+        let mut packet = sync_pair(8, 1, 0).0;
+        packet[index] = value;
+        assert_eq!(packet_rejection(&packet), Some(reason));
+    }
+    assert_eq!(packet_rejection(&[0; 12]), Some("short_header"));
+    assert_eq!(packet_rejection(&header(2, 44, 8, 1, 0, 0)), Some("length"));
+}
+
+#[test]
+fn loop_retries_dropped_subscription_and_answers_pdelay_while_following() {
+    // Protocol-fixed PTP ports on a fresh loopback address: parallel suites
+    // cannot collide, and the sender still targets the real receiver ports.
+    let (peer, remote_event, remote_general) = crate::test_net::ptp_receiver_sockets();
+    remote_event.set_nonblocking(true).unwrap();
+    remote_general.set_nonblocking(true).unwrap();
+    let event = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let general = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let local_event = event.local_addr().unwrap();
+    let local_general = general.local_addr().unwrap();
+    let timer =
+        PtpMaster::from_sockets(vec![peer], vec![peer], Clock::new(), event, general).unwrap();
+    thread::sleep(Duration::from_millis(150));
+    let mut buffer = [0u8; 2048];
+    assert!(remote_general.recv_from(&mut buffer).is_err());
+    timer.activate(peer, "127.0.0.1".parse().unwrap());
+    let started = Instant::now();
+    let request = header(2, 54, 8, 77, 0x0408, 0);
+    remote_event.send_to(&request, local_event).unwrap();
+    // Invalid traffic must be visible without making the clock ready.
+    remote_general.send_to(&[0; 12], local_general).unwrap();
+    let mut requests = 0;
+    let mut pdelay_event = false;
+    let mut pdelay_follow = false;
+    while started.elapsed() < Duration::from_secs(3) {
+        while let Ok((n, _)) = remote_general.recv_from(&mut buffer) {
+            if buffer[0] & 15 == 12 && n == 54 && buffer[48] == 0 {
+                requests += 1; // Deliberately drop every subscription.
+            }
+            if buffer[0] & 15 == 10 {
+                assert_eq!(&buffer[30..32], &77u16.to_be_bytes());
+                assert_eq!(&buffer[44..54], &request[20..30]);
+                pdelay_follow = true;
+            }
+        }
+        while let Ok((_, _)) = remote_event.recv_from(&mut buffer) {
+            if buffer[0] & 15 == 3 {
+                assert_eq!(&buffer[44..54], &request[20..30]);
+                pdelay_event = true;
+            }
+        }
+        if requests >= 2 && pdelay_event && pdelay_follow {
+            break;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        requests >= 2,
+        "lost subscription must retry inside startup deadline"
+    );
+    assert!(pdelay_event && pdelay_follow);
+    let snapshot = timer.snapshots().remove(0);
+    assert_eq!(snapshot.packets.pdelay_responses, 1);
+    assert_eq!(snapshot.packets.last_rejection, Some("short_header"));
+    assert_eq!(snapshot.exchanges, 0);
+    assert!(!snapshot.ready);
+    assert_eq!(snapshot.phase, "waiting_announce");
+    assert!(timer.network_snapshot().event_received > 0);
+    assert!(timer.network_snapshot().general_received > 0);
+}
+
+#[test]
+fn localhost_follower_locks_after_receiver_drops_the_first_subscription() {
+    let (peer, remote_event, remote_general) = crate::test_net::ptp_receiver_sockets();
+    remote_event.set_nonblocking(true).unwrap();
+    remote_general.set_nonblocking(true).unwrap();
+    let event = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let general = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let local_event = event.local_addr().unwrap();
+    let local_general = general.local_addr().unwrap();
+    let clock = Clock::new();
+    let timer =
+        PtpMaster::from_sockets(vec![peer], vec![peer], clock.clone(), event, general).unwrap();
+    timer.activate(peer, "127.0.0.1".parse().unwrap());
+    let started = Instant::now();
+    let mut next_sync = started;
+    let mut sync_sequence = 0;
+    let mut subscriptions = 0;
+    let mut buffer = [0u8; 2048];
+    while started.elapsed() < Duration::from_secs(7) && !timer.ready(peer) {
+        while let Ok((n, _)) = remote_general.recv_from(&mut buffer) {
+            if n == 54 && buffer[0] & 15 == 12 && buffer[48] == 0 {
+                subscriptions += 1;
+            }
+        }
+        let now = Instant::now();
+        if subscriptions >= 2 && now >= next_sync {
+            remote_general
+                .send_to(&announce(8, sync_sequence, 0), local_general)
+                .unwrap();
+            let (sync, follow) = sync_pair(8, sync_sequence, clock.now_ns() + 1_000_000);
+            remote_event.send_to(&sync, local_event).unwrap();
+            remote_general.send_to(&follow, local_general).unwrap();
+            sync_sequence = sync_sequence.wrapping_add(1);
+            next_sync = now + Duration::from_millis(125);
+        }
+        while let Ok((n, _)) = remote_event.recv_from(&mut buffer) {
+            if subscriptions >= 2 && n == 44 && buffer[0] & 15 == 1 {
+                let sequence = u16::from_be_bytes([buffer[30], buffer[31]]);
+                let mut response = header(9, 54, 8, sequence, 0x0408, 0);
+                timestamp(&mut response[34..44], clock.now_ns() + 1_000_000);
+                response[44..54].copy_from_slice(&buffer[20..30]);
+                remote_general.send_to(&response, local_general).unwrap();
+            }
+        }
+        thread::sleep(Duration::from_millis(2));
+    }
+    assert!(subscriptions >= 2);
+    assert!(
+        timer.ready(peer),
+        "follower must lock before the ordinary eight-second deadline"
+    );
+    let snapshot = timer.snapshots().remove(0);
+    assert!(snapshot.exchanges >= 3);
+    assert!(snapshot.offset_ns.is_some());
+    assert_eq!(snapshot.phase, "ready");
+}
+
+#[test]
+fn stale_pair_cannot_rewind_the_sync_offset_or_exchange_streak() {
+    let start = Instant::now();
+    let mut state = follower(start);
+    let receiver_offset: i128 = 5_000_000_000;
+    let newest = 2_000_000_000u64;
+    let (sync, follow) = sync_pair(8, 2, (newest as i128 + receiver_offset) as u64);
+    followed_packet(&mut state, &sync, newest + 10_000, start, 7);
+    followed_packet(&mut state, &follow, newest + 20_000, start, 7);
+    let stale = 1_000_000_000u64;
+    let later = start + Duration::from_millis(125);
+    let (sync, follow) = sync_pair(8, 1, (stale as i128 + receiver_offset) as u64);
+    // Both packets arrive after the newer pair, so local receive timestamps
+    // alone cannot identify this older source sequence.
+    followed_packet(&mut state, &sync, newest + 125_010_000, later, 7);
+    followed_packet(&mut state, &follow, newest + 125_020_000, later, 7);
+    assert_eq!(state.exchanges, 1);
+    assert_eq!(
+        state.sync_pair.map(|sample| sample.received),
+        Some(newest + 10_000)
+    );
+    let offset = state.sync_offset.expect("sync offset");
+    assert!((offset - (receiver_offset as f64 - 10_000.0)).abs() < 1.0);
+}
+
+#[test]
+fn follower_locks_from_sync_pairs_when_delay_responses_stay_unusable() {
+    // Receivers such as HomePod OS 27 answer the delay request with timestamps
+    // that contradict their own sync timestamps. The session must still obtain a
+    // usable timeline from the sync exchange instead of failing to start.
+    let start = Instant::now();
+    let mut state = follower(start);
+    let receiver_offset: i128 = 4_200_000_000;
+    for seq in 0..3u16 {
+        let at = start + Duration::from_millis(u64::from(seq) * 125);
+        let local = 1_000_000_000 + u64::from(seq) * 1_000_000_000;
+        let (sync, follow) = sync_pair(8, seq, (local as i128 + receiver_offset) as u64);
+        followed_packet(&mut state, &sync, local + 90_000, at, 7);
+        followed_packet(&mut state, &follow, local + 95_000, at, 7);
+        state.delay = Some((seq, local + 200_000));
+        state.delay_age = Some(at);
+        let mut response = header(9, 54, 8, seq, 0x0408, 0);
+        timestamp(&mut response[34..44], 17);
+        response[44..52].copy_from_slice(&7u64.to_be_bytes());
+        response[52..54].copy_from_slice(&0x8005u16.to_be_bytes());
+        followed_packet(&mut state, &response, local + 400_000, at, 7);
+        assert_eq!(state.packets.last_rejection, Some("round_trip"));
+    }
+    assert_eq!(state.exchanges, 3);
+    assert_eq!(state.packets.rejected, 3);
+    assert!(state.offset.is_none(), "no delay response was accepted");
+    let now = start + Duration::from_millis(250);
+    assert_eq!(state.offset_source(now), Some("sync"));
+    let negative_rtt = state
+        .packets
+        .last_round_trip_ns
+        .expect("round trip recorded");
+    assert!(negative_rtt < 0.0, "contradictory timestamps");
+    let offset = state.effective_offset(now).expect("sync offset");
+    assert!((offset - receiver_offset as f64).abs() < 200_000.0);
+    assert!(state.ready(start + Duration::from_millis(250)));
+}
+
+#[test]
+fn expired_delay_offset_tracks_fresh_syncs_and_recovers_without_stale_smoothing() {
+    fn respond(state: &mut PeerState, seq: u16, local: u64, remote: u64, at: Instant) {
+        state.delay = Some((seq, local + 200_000));
+        state.delay_age = Some(at);
+        let mut response = header(9, 54, 8, seq, 0x0408, 0);
+        timestamp(&mut response[34..44], remote);
+        response[44..52].copy_from_slice(&7u64.to_be_bytes());
+        response[52..54].copy_from_slice(&0x8005u16.to_be_bytes());
+        followed_packet(state, &response, local + 400_000, at, 7);
+    }
+
+    let start = Instant::now();
+    let mut state = follower(start);
+    let initial_offset = 5_000_000_000u64;
+    // Simulate one minute of 100 ppm clock drift, with ongoing Sync pairs but
+    // only the first delay response usable. Rejected responses cannot renew it.
+    for seq in 0..483u16 {
+        let at = start + Duration::from_millis(u64::from(seq) * 125);
+        let local = 1_000_000_000 + u64::from(seq) * 125_000_000;
+        let drift = u64::from(seq) * 12_500;
+        let (sync, follow) = sync_pair(8, seq, local + initial_offset + drift);
+        followed_packet(&mut state, &sync, local + 90_000, at, 7);
+        followed_packet(&mut state, &follow, local + 95_000, at, 7);
+        if seq % 8 == 0 {
+            let remote = if seq == 0 {
+                local + initial_offset + 290_000
+            } else {
+                17
+            };
+            respond(&mut state, seq, local, remote, at);
+        }
+        if seq < 16 {
+            assert_eq!(state.offset_source(at), Some("delay"));
+            assert_eq!(state.effective_offset(at), Some(initial_offset as f64));
+        } else {
+            assert_eq!(state.offset_source(at), Some("sync"));
+            assert_eq!(state.effective_offset(at), state.sync_offset);
+        }
+    }
+    let now = start + Duration::from_millis(482 * 125);
+    let current_offset = initial_offset as f64 + 482.0 * 12_500.0;
+    assert!(state.ready(now));
+    assert_eq!(state.packets.last_rejection, Some("round_trip"));
+    assert!((state.effective_offset(now).unwrap() - current_offset).abs() < 200_000.0);
+
+    // Once delay responses recover, the old measurement must not bias the new
+    // estimate or cause a false offset jump that clears the healthy Sync streak.
+    let seq = 483;
+    let at = start + Duration::from_millis(u64::from(seq) * 125);
+    let local = 1_000_000_000 + u64::from(seq) * 125_000_000;
+    let recovered_offset = initial_offset + u64::from(seq) * 12_500;
+    let (sync, follow) = sync_pair(8, seq, local + recovered_offset);
+    followed_packet(&mut state, &sync, local + 90_000, at, 7);
+    followed_packet(&mut state, &follow, local + 95_000, at, 7);
+    respond(
+        &mut state,
+        seq,
+        local,
+        local + recovered_offset + 290_000,
+        at,
+    );
+    assert_eq!(state.offset_source(at), Some("delay"));
+    assert_eq!(state.effective_offset(at), Some(recovered_offset as f64));
+    assert_eq!(state.jitter_ns, None);
+    assert!(state.ready(at));
+}
+
+#[test]
+fn delayed_sync_after_its_follow_up_cannot_rewind_a_newer_pair() {
+    for (older, newer) in [(1, 2), (u16::MAX, 0)] {
+        let start = Instant::now();
+        let mut state = follower(start);
+        let offset = 5_000_000_000;
+        let (old_sync, old_follow) = sync_pair(8, older, 1_000_000_000 + offset);
+        followed_packet(&mut state, &old_follow, 1_000_090_000, start, 7);
+        let (sync, follow) = sync_pair(8, newer, 1_125_000_000 + offset);
+        let at = start + Duration::from_millis(125);
+        followed_packet(&mut state, &sync, 1_125_090_000, at, 7);
+        followed_packet(&mut state, &follow, 1_125_095_000, at, 7);
+        let offset_before = state.sync_offset;
+        followed_packet(
+            &mut state,
+            &old_sync,
+            1_250_090_000,
+            start + Duration::from_millis(250),
+            7,
+        );
+        assert_eq!(state.sync_pair.unwrap().sequence, newer);
+        assert_eq!(state.sync_offset, offset_before);
+        assert_eq!(state.last, Some(at));
+        assert_eq!(state.exchanges, 1);
+    }
+}
+
+#[test]
+fn sync_sequence_wrap_and_restart_after_timeout_can_reach_readiness() {
+    let start = Instant::now();
+    let mut state = follower(start);
+    for (seq, millis) in [
+        (u16::MAX, 0),
+        (0, 125),
+        (1, 250),
+        (0, 4000),
+        (1, 4125),
+        (2, 4250),
+    ] {
+        let at = start + Duration::from_millis(millis);
+        let local = 1_000_000_000 + millis * 1_000_000;
+        let (sync, follow) = sync_pair(8, seq, local + 1_000_000);
+        followed_packet(&mut state, &sync, local + 90_000, at, 7);
+        followed_packet(&mut state, &follow, local + 95_000, at, 7);
+        if millis == 250 || millis == 4250 {
+            assert_eq!(state.exchanges, 3);
+            assert!(state.ready(at));
+        } else if millis == 4000 {
+            assert_eq!(state.exchanges, 1);
+            assert!(!state.ready(at));
+        }
+    }
+}
+
+#[test]
+fn older_exchange_instants_cannot_refresh_or_inflate_readiness() {
+    let start = Instant::now();
+    let mut state = PeerState::default();
+    state.exchanged(start);
+    state.exchanged(start + Duration::from_millis(125));
+    state.exchanged(start + Duration::from_millis(50));
+    assert_eq!(state.exchanges, 2);
+    assert_eq!(state.last, Some(start + Duration::from_millis(125)));
+    assert!(!state.ready(start + Duration::from_millis(250)));
+    state.exchanged(start + Duration::from_millis(250));
+    assert!(state.ready(start + Duration::from_millis(250)));
+}

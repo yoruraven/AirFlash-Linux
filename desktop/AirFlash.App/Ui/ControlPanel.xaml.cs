@@ -3,6 +3,8 @@ using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Automation.Peers;
+using System.Windows.Data;
 using System.Windows.Media;
 using System.Windows.Input;
 using System.Windows.Threading;
@@ -12,6 +14,7 @@ namespace AirFlash.App.Ui;
 
 public partial class ControlPanel : Window
 {
+    public const double CompactWidth = 400;
     private readonly AppViewModel _viewModel;
     private bool _allowClose;
     private bool _placing;
@@ -20,22 +23,15 @@ public partial class ControlPanel : Window
     public bool MenuOpen { get; set; }
     public TrayService? Tray { get; set; }
     public event Action? SettingsRequested;
+    public event Action<int>? LatencySettingsRequested;
     public event Action? QuitRequested;
     public ControlPanel(AppViewModel viewModel)
     {
         InitializeComponent(); _viewModel = viewModel; DataContext = viewModel; WindowThemeService.Track(this); AppIconService.Track(this);
-        viewModel.SettingsChanged += UpdateLayoutSettings;
         viewModel.Receivers.CollectionChanged += OnReceiversChanged;
+        IsVisibleChanged += (_, _) => viewModel.SetPanelVisible(IsVisible);
         SizeChanged += (_, _) => { if (!_placing) RequestPlacement(); };
         DpiChanged += (_, _) => RequestPlacement();
-        UpdateLayoutSettings();
-    }
-    private void UpdateLayoutSettings()
-    {
-        var width = _viewModel.Settings.ShowWiderVolume ? 520 : 440;
-        if (Width == width) return;
-        Width = width;
-        RequestPlacement();
     }
     public void ToggleFromTray()
     {
@@ -44,6 +40,7 @@ public partial class ControlPanel : Window
     }
     public void ShowPanel()
     {
+        Width = CompactWidth;
         Show(); RequestPlacement(); Activate();
     }
     public void RequestPlacement()
@@ -60,17 +57,30 @@ public partial class ControlPanel : Window
             UiPerformance.Count("panel.place");
             var area = Tray?.WorkArea() ?? NativeWindowPlacement.CursorWorkArea();
             var maxDip = area.Rect.Height * .7 / area.Scale;
-            var constraintsChanged = MaxHeight != maxDip;
+            var constraintsChanged = MaxHeight != maxDip || Width != CompactWidth;
+            Width = CompactWidth;
             DeviceScroll.MaxHeight = Math.Max(80, maxDip - 280);
             MaxHeight = maxDip;
             if (constraintsChanged || ActualHeight <= 0) UpdateLayout();
-            NativeWindowPlacement.Place(this, area, Width, ActualHeight);
+            // Native placement converts this DIP width to monitor pixels once.
+            // Never reuse a width fed back by a native resize or a DPI transition.
+            NativeWindowPlacement.Place(this, area, CompactWidth, ActualHeight);
         }
         finally { _placing = false; }
     }
     private void OnDeactivated(object sender, EventArgs args)
     {
         Dispatcher.BeginInvoke(() => { if (!IsActive && !MenuOpen) { _lastDismissed = DateTime.UtcNow; Hide(); } }, DispatcherPriority.Background);
+    }
+    private void OnActionHintUpdated(object sender, DataTransferEventArgs args)
+    {
+        if (!AutomationPeer.ListenerExists(AutomationEvents.LiveRegionChanged)) return;
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (PairingActionHint.IsVisible && PairingActionHint.Text.Length > 0)
+                (UIElementAutomationPeer.FromElement(PairingActionHint) ?? UIElementAutomationPeer.CreatePeerForElement(PairingActionHint))?
+                    .RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
+        }, DispatcherPriority.Loaded);
     }
     private void OnKeyDown(object sender, KeyEventArgs args) { if (args.Key == Key.Escape) { Hide(); args.Handled = true; } }
     private void OnClosing(object? sender, CancelEventArgs args) { if (!_allowClose) { args.Cancel = true; Hide(); } }
@@ -98,12 +108,13 @@ public partial class ControlPanel : Window
     private void OnPopupOpened(object? sender, EventArgs args) => MenuOpen = true;
     private void OnPopupClosed(object? sender, EventArgs args) { MenuOpen = false; if (!IsActive) Hide(); }
     private void OnSettings(object sender, RoutedEventArgs args) => SettingsRequested?.Invoke();
+    private void OnLatencySettings(object sender, RoutedEventArgs args)
+        => LatencySettingsRequested?.Invoke(_viewModel.CanEditGlobalLatency ? SettingsViewModel.StreamingPage : SettingsViewModel.ReceiversPage);
     private void OnQuit(object sender, RoutedEventArgs args) => QuitRequested?.Invoke();
     private void OnReceiversChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs args)
         => RequestPlacement();
     public void ShutdownPanel()
     {
-        _viewModel.SettingsChanged -= UpdateLayoutSettings;
         _viewModel.Receivers.CollectionChanged -= OnReceiversChanged;
         _placement?.Abort();
         _allowClose = true; Close();

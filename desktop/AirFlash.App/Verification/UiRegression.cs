@@ -1,6 +1,12 @@
 using System.Windows;
+using System.Windows.Automation;
+using System.Windows.Automation.Peers;
+using System.Windows.Automation.Provider;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Media;
 using System.Windows.Threading;
+using AirFlash.App.Services;
 using AirFlash.App.Ui;
 using AirFlash.App.ViewModels;
 using AirFlash.Core;
@@ -10,11 +16,17 @@ internal static class UiRegression
 {
     public static async Task RunAsync(List<string> checks, string directory)
     {
+        await PairingHintRegression.RunAsync(checks, directory);
+        await StopRegression.RunAsync(checks, directory);
+        await ForcedLatencyRegression.RunAsync(checks, directory);
+        await LatencyEntryRegression.RunAsync(checks);
+        await RunCompactPanelRegressionAsync(checks, directory);
         var store = new UiSmoke.MemoryStore(); var audio = new UiSmoke.MockAudio();
         var autostart = new UiSmoke.MockAutostart(); var discovery = new UiSmoke.MockDiscovery();
         var engine = new UiSmoke.MockFactory();
-        await using var app = new AppViewModel(store, discovery, autostart, audio, engine, Application.Current.Dispatcher);
-        app.Start(); await app.Startup; await Pump();
+        var applications = new MockApplications();
+        await using var app = new AppViewModel(store, discovery, autostart, audio, engine, Application.Current.Dispatcher, applications: applications);
+        app.SetPanelVisible(true); app.Start(); await app.Startup; await Pump();
         var window = new SettingsWindow(app); window.Show(); await Pump();
         var vm = window.ViewModel;
         try
@@ -94,6 +106,21 @@ internal static class UiRegression
             Check(!await vm.ApplyAsync() && !vm.HasChanges && store.Saved.MuteWhileStreaming && vm.Error.Contains("mock mute failed", StringComparison.Ordinal), "saved configuration and audio failure are distinguished", checks);
             audio.FailMute = false; vm.Draft.MuteWhileStreaming = false; await vm.ApplyAsync();
 
+            vm.Draft.CaptureEndpoint = "endpoint-c";
+            vm.Draft.MuteWhileStreaming = true;
+            Check(await vm.ApplyAsync() && store.Saved.CaptureEndpoint == "endpoint-c", "recording selection saves with automatic mute enabled", checks);
+            await Until(() => app.Snapshot.State == PlaybackState.Streaming);
+            audio.Items = [new("endpoint-a", "Speaker"), new("endpoint-b", "Virtual output")];
+            await vm.LoadEndpointsAsync(true);
+            Check(vm.Draft.CaptureEndpoint == "endpoint-c" && vm.Endpoints.Any(e => e.Id == "endpoint-c" && e.Name.StartsWith(L.Get("Unavailable · "), StringComparison.Ordinal)), "missing recording selection remains visible", checks);
+            var recording = new AudioEndpoint("endpoint-c", "Voicemeeter Output", AudioEndpointKind.Recording);
+            audio.Items = [new("endpoint-a", "Speaker"), new("endpoint-b", "Virtual output"), recording];
+            await vm.LoadEndpointsAsync(true);
+            Check(vm.Draft.CaptureEndpoint == "endpoint-c" && vm.Endpoints.Contains(recording), "restored recording endpoint retains ID and type", checks);
+            vm.Draft.CaptureEndpoint = "endpoint-b";
+            vm.Draft.MuteWhileStreaming = false;
+            Check(await vm.ApplyAsync(), "switching back to playback succeeds", checks);
+
             vm.SelectedPage = SettingsViewModel.AudioCapturePage; await vm.LoadEndpointsAsync(false);
             Check(vm.Endpoints.Any(e => e.Id == "endpoint-b"), "audio page uses cached endpoints", checks);
             audio.Items = [new("endpoint-a", "Renamed")];
@@ -121,6 +148,31 @@ internal static class UiRegression
             audio.EnumerationGate.TrySetResult(); await refresh;
             Check(audio.Enumerations == enumerations + 1 && audio.MaxEnumerations == 1 && vm.Endpoints.Any(e => e.Name == "Newest"), "changes during enumeration trigger one serial follow-up", checks);
             audio.EnumerationGate = null; audio.EnumerationEntered = null;
+
+            var firstApplication = new CaptureApplication(@"C:\Music.exe", "Music", 41, 100);
+            var secondApplication = firstApplication with { ProcessId = 42, StartedAt = 200 };
+            applications.Items = [firstApplication, secondApplication];
+            vm.Draft.CaptureMode = "application"; await Until(() => !vm.IsApplicationsLoading); await Pump();
+            vm.SelectedApplication = secondApplication;
+            vm.Draft.MuteWhileStreaming = true;
+            Check(!vm.CanMuteEndpoint && await vm.ApplyAsync(), "application selection saves while endpoint mute is disabled", checks);
+            Check(store.Saved.CaptureApplicationPath == firstApplication.Path && app.Settings.CaptureApplicationInstance == secondApplication, "application identity retains chosen runtime instance", checks);
+            foreach (var dark in new[] { false, true })
+            {
+                ThemeService.SetForVerification(dark); await Pump();
+                var scroll = window.PageScroll;
+                scroll.ScrollToHome(); await Pump();
+                UiSmoke.Render(window, Path.Combine(directory, $"capture-{(dark ? "dark" : "light")}-top.png"), 1);
+                scroll.ScrollToEnd(); await Pump();
+                UiSmoke.Render(window, Path.Combine(directory, $"capture-{(dark ? "dark" : "light")}-routing.png"), 1);
+            }
+            applications.Items = []; await vm.LoadApplicationsAsync();
+            Check(vm.Draft.CaptureApplicationPath == firstApplication.Path && vm.SelectedApplication?.ProcessId == 0, "missing application stays selected without switching to system audio", checks);
+            applications.Items = [firstApplication]; await vm.LoadApplicationsAsync();
+            Check(vm.SelectedApplication == firstApplication, "unique restarted application is shown", checks);
+            vm.Draft.CaptureMode = "endpoint"; vm.Draft.MuteWhileStreaming = false;
+            Check(await vm.ApplyAsync(), "returning from application to endpoint capture succeeds", checks);
+            await Until(() => app.Snapshot.State == PlaybackState.Streaming); await Pump();
 
             var statusNotifications = 0; var rowNotifications = 0;
             app.PropertyChanged += (_, args) => { if (args.PropertyName == nameof(AppViewModel.StatusTitle)) statusNotifications++; };
@@ -157,7 +209,90 @@ internal static class UiRegression
         finally { store.SaveGate?.TrySetResult(); audio.EnumerationGate?.TrySetResult(); await vm.ApplicationCompleted; window.Close(); }
         await RunIdentityRegressionAsync(checks, directory);
         await RunAutoConnectIdentityRegressionAsync(checks);
+        await RunDiscoveryDemandRegressionAsync(checks);
         await RunStereoIdentityRegressionAsync(checks, directory);
+        await RunSoftwareStereoRegressionAsync(checks, directory);
+        await ReceiverSettingsRegression.RunAsync(checks, directory);
+    }
+    private static async Task RunSoftwareStereoRegressionAsync(List<string> checks, string directory)
+    {
+        var a = new Receiver("a", "A · HomePod", "127.0.0.1");
+        var b = new Receiver("b", "B · Soundbar", "127.0.0.2");
+        var c = new Receiver("c", "C · Mac", "127.0.0.3");
+        var native = new Receiver("stereo:native", "Native pair", "") { StereoId = "native", Members = [new("n1", "Native left", "127.0.0.4"), new("n2", "Native right", "127.0.0.5")] };
+        var discovery = new UiSmoke.MockDiscovery { Items = [a, b, c, native] };
+        var store = new UiSmoke.MemoryStore(); var engine = new UiSmoke.MockFactory();
+        await using var app = new AppViewModel(store, discovery, new UiSmoke.MockAutostart(), new UiSmoke.MockAudio(), engine, Application.Current.Dispatcher);
+        app.SetPanelVisible(true); app.Start(); await app.Startup; await Pump();
+        var window = new SettingsWindow(app); window.Show(); var vm = window.ViewModel;
+        var panel = new ControlPanel(app); panel.ShowPanel();
+        try
+        {
+            vm.SelectedPage = SettingsViewModel.ReceiversPage; await Pump();
+            Check(vm.GroupCandidates.Count == 3 && vm.GroupCandidates.All(r => r.Id != "n1" && r.Id != "n2" && !r.IsGroup), "software editor excludes native pair members and group roots", checks);
+            vm.AddGroupCommand.Execute(null); await Pump();
+            var editor = vm.Groups.Single(); var group = editor.Group; var id = group.Id;
+            group.Name = "Office software stereo"; group.LeftOffsetMs = -80; group.RightOffsetMs = 25; group.SampleRate = "48000";
+            var combos = UiSmoke.Descendants(window).OfType<ComboBox>().Where(box => box.ItemsSource == vm.GroupCandidates).ToArray();
+            Check(combos.Length == 2 && combos.Select(box => box.SelectedValue).ToHashSet().SetEquals(new[] { "a", "b" }), "software member selectors bind stable IDs", checks);
+            Check(await vm.ApplyAsync() && store.Saved.SoftwareGroups.Single().Id == id, "software group creation saves stable ID and common rate", checks);
+            await app.ToggleAsync(app.AllReceivers.Single(r => r.Id == id));
+            await Until(() => app.Snapshot.State == PlaybackState.Streaming && app.Receivers.Single(r => r.Receiver.Id == id).MemberVolumes.All(m => m.CanSetVolume));
+            var card = app.Receivers.Single(r => r.Receiver.Id == id);
+            Check(!card.HasSingleVolume && card.MemberVolumes.Count == 2 && card.MemberVolumes.Select(m => m.Volume).ToArray().SequenceEqual(new[] { 28, 45 }), "software panel exposes two independent hardware volume readouts", checks);
+            Check(!engine.Commands.Any(command => command.Text("command") == "set_device_volume"), "creating a software group does not write hardware volume", checks);
+            await Pump();
+            Check(UiSmoke.Descendants(window).OfType<Button>().Single(button => ReferenceEquals(button.Command, editor.SwapCommand)).IsEnabled, "software swap button is enabled again after applying", checks);
+            await app.SetReceiverVolumeAsync("b", 61);
+            await Until(() => app.ReceiverVolume("b").Display == 61);
+            Check(app.ReceiverVolume("a").Display == 28 && app.ReceiverVolume("b").Status == "confirmed", "software hardware volume writes only selected member and preserves confirmation", checks);
+            window.PageScroll.ScrollToVerticalOffset(300); await Pump();
+            UiSmoke.Render(window, Path.Combine(directory, "settings-software-stereo.png"), 1);
+            panel.ShowPanel(); await Pump();
+            panel.DeviceScroll.ScrollToBottom(); await Pump();
+            Check(UiSmoke.Descendants(panel).OfType<Slider>().Count(slider => slider.DataContext is ReceiverViewModel member && card.MemberVolumes.Contains(member) && slider.IsEnabled) == 2, "software panel renders both enabled member sliders", checks);
+            UiSmoke.Render(panel, Path.Combine(directory, "panel-software-stereo.png"), 1);
+            var starts = engine.CreatedCount;
+            editor.SwapCommand.Execute(null);
+            Check(await vm.ApplyAsync(), "software left-right swap applies", checks);
+            await Until(() => app.Snapshot.State == PlaybackState.Streaming && engine.CreatedCount == starts + 1 && app.Snapshot.Receiver?.Members[0].Id == "b");
+            Check(app.Snapshot.Receiver!.Members[0].Id == "b" && app.Snapshot.Receiver.Members[0].SyncOffsetMs == 25, "software swap rebuilds whole session and retains member offset: " + string.Join(",", app.Snapshot.Receiver.Members.Select(m => $"{m.Id}:{m.Channel}:{m.SyncOffsetMs}")) + $" draft={group.LeftId}/{group.RightId}:{group.LeftOffsetMs}/{group.RightOffsetMs}", checks);
+            panel.Hide(); vm.SelectedPage = 0; await Pump();
+            Check(discovery.Running, "active software group retains discovery with receiver lists hidden", checks);
+            discovery.Items = [b, c, native]; discovery.Publish(); await Pump();
+            Check(app.Snapshot.State == PlaybackState.Streaming && engine.CreatedCount == starts + 1, "temporary software member broadcast loss preserves active transport", checks);
+            vm.Draft.MasterVolume = 23; vm.Draft.StandbyEnabled = true;
+            Check(await vm.ApplyAsync(), "hot software settings apply during missing member discovery", checks);
+            Check(app.Snapshot.State == PlaybackState.Streaming && engine.CreatedCount == starts + 1,
+                "hot software settings retain the engine while a member broadcast is missing", checks);
+            discovery.Items = [a with { Address = "127.0.0.5" }, b, c, native]; discovery.Publish(); await Pump();
+            vm.Draft.MasterVolume = 24;
+            Check(await vm.ApplyAsync(), "hot software settings apply after passive address change", checks);
+            Check(app.Snapshot.State == PlaybackState.Streaming && engine.CreatedCount == starts + 1
+                && app.Snapshot.Receiver!.Members.Single(m => m.Id == "a").Address == "127.0.0.1",
+                "hot software settings preserve working addresses until a real rebuild", checks);
+            discovery.Items = [a, b, c, native]; discovery.Publish(); await Pump();
+            Check(group.LeftId == "b" && group.RightId == "a", "discovery refresh preserves software member selectors", checks);
+            starts = engine.CreatedCount; group.RightId = "c";
+            Check(await vm.ApplyAsync(), "software member replacement applies", checks);
+            await Until(() => app.Snapshot.State == PlaybackState.Streaming && engine.CreatedCount == starts + 1 && app.Snapshot.Receiver?.Members[1].Id == "c");
+            Check(app.Snapshot.Receiver!.Members[1].Id == "c", "software replacement starts both new members together", checks);
+            editor.RemoveCommand.Execute(null);
+            var split = await vm.ApplyAsync(); await Pump();
+            Check(split && app.Snapshot.State == PlaybackState.Idle && store.Saved.SoftwareGroups.Count == 0, "splitting an active software group stops and removes its session", checks);
+            vm.AddGroupCommand.Execute(null); Check(await vm.ApplyAsync(), "software group can be recreated after split", checks);
+            await app.ToggleAsync(app.AllReceivers.Single(r => r.IsSoftwareGroup)); await Until(() => app.Snapshot.State == PlaybackState.Streaming);
+            discovery.Items = [new Receiver("stereo:new", "New native pair", "") { StereoId = "new", Members = [a, b] }, c, native];
+            discovery.Publish(); await Until(() => app.Snapshot.State == PlaybackState.Idle);
+            Check(!app.Snapshot.IsActive, "confirmed native pairing invalidates active software membership", checks);
+        }
+        finally { await vm.ApplicationCompleted; window.Close(); panel.ShutdownPanel(); }
+    }
+    private sealed class MockApplications : IApplicationCatalog
+    {
+        public bool Supported => true;
+        public IReadOnlyList<CaptureApplication> Items { get; set; } = [];
+        public Task<IReadOnlyList<CaptureApplication>> RefreshAsync(CancellationToken cancellation = default) => Task.FromResult(Items);
     }
     private static async Task RunIdentityRegressionAsync(List<string> checks, string directory)
     {
@@ -168,7 +303,7 @@ internal static class UiRegression
         var discovery = new UiSmoke.MockDiscovery { Items = [new("127.0.0.1:7000", "Office", "127.0.0.1")] };
         var engine = new UiSmoke.MockFactory();
         await using var app = new AppViewModel(store, discovery, new UiSmoke.MockAutostart(), new UiSmoke.MockAudio(), engine, Application.Current.Dispatcher);
-        app.Start(); await app.Startup; await Until(() => app.AllReceivers.Count == 1);
+        app.SetPanelVisible(true); app.Start(); await app.Startup; await Until(() => app.AllReceivers.Count == 1);
         var window = new SettingsWindow(app); window.Show(); await Pump(); var vm = window.ViewModel;
         try
         {
@@ -227,7 +362,7 @@ internal static class UiRegression
         var discovery = new UiSmoke.MockDiscovery { Items = ReceiverAggregator.Build(services) };
         var engine = new UiSmoke.MockFactory();
         await using var app = new AppViewModel(store, discovery, new UiSmoke.MockAutostart(), new UiSmoke.MockAudio(), engine, Application.Current.Dispatcher);
-        app.Start(); await app.Startup; await Until(() => app.AllReceivers.Count == 1);
+        app.SetPanelVisible(true); app.Start(); await app.Startup; await Until(() => app.AllReceivers.Count == 1);
         var window = new SettingsWindow(app); window.Show(); await Pump(); var vm = window.ViewModel;
         try
         {
@@ -236,8 +371,11 @@ internal static class UiRegression
             vm.SelectedPage = SettingsViewModel.ReceiversPage; await Pump(); UiSmoke.Render(window, Path.Combine(directory, "settings-identity-stereo.png"), 1);
             await app.ToggleAsync(app.AllReceivers[0]); await Until(() => app.Snapshot.State == PlaybackState.Streaming);
             discovery.Items = ReceiverAggregator.Build(services.Take(2)); discovery.Publish();
-            await Until(() => !app.Snapshot.IsActive && app.AllReceivers.Single().Members.Length == 1);
-            Check(app.AllReceivers.Single().Detail.Contains("1/2", StringComparison.Ordinal) && engine.CreatedCount == 1, "missing stereo member shows one of two and stops incomplete playback", checks);
+            await Until(() => app.AllReceivers.Single().Members.Length == 1);
+            Check(app.Snapshot.State == PlaybackState.Streaming && app.AllReceivers.Single().Detail.Contains("1/2", StringComparison.Ordinal)
+                && engine.Commands.Count(c => c.Text("command") == "start") == 1
+                && engine.CreatedCount - engine.DisposedCount == 1,
+                "missing discovery member shows one of two without stopping active transport", checks);
         }
         finally { await vm.ApplicationCompleted; window.Close(); }
 
@@ -245,6 +383,234 @@ internal static class UiRegression
             new Dictionary<string, string> { ["deviceid"] = id, ["model"] = "AudioAccessory6,1", ["tsid"] = "pair", ["gpn"] = "Office stereo" });
     }
     private static void Check(bool value, string name, List<string> checks) { if (!value) throw new InvalidOperationException(name); checks.Add(name); }
+    private static async Task RunDiscoveryDemandRegressionAsync(List<string> checks)
+    {
+        var discovery = new UiSmoke.MockDiscovery(); var engine = new UiSmoke.MockFactory();
+        await using var app = new AppViewModel(new UiSmoke.MemoryStore(), discovery, new UiSmoke.MockAutostart(), new UiSmoke.MockAudio(), engine, Application.Current.Dispatcher);
+        app.Start(); await app.Startup; await Pump();
+        Check(!discovery.Running && discovery.Starts == 0, "tray startup without automatic connection never starts discovery", checks);
+        var panel = new ControlPanel(app); var settings = new SettingsWindow(app);
+        try
+        {
+            panel.ShowPanel(); await Pump();
+            Check(discovery.Running && discovery.Starts == 1 && app.Receivers.Count == 2, "visible panel starts discovery and displays results", checks);
+            settings.ViewModel.SelectedPage = SettingsViewModel.ReceiversPage; settings.Show(); await Pump();
+            panel.Hide(); await Pump();
+            Check(discovery.Running && discovery.Starts == 1 && discovery.Stops == 0, "receiver page shares discovery after panel hides", checks);
+            settings.ViewModel.SelectedPage = 0; await Pump();
+            Check(!discovery.Running && discovery.Stops == 1 && app.Receivers.Count == 2, "last receiver list hiding stops discovery and preserves cache", checks);
+            panel.ShowPanel(); await Pump();
+            var previousConnections = engine.CreatedCount;
+            await app.ToggleAsync(app.AllReceivers.First(r => r.Online)); await Until(() => app.Snapshot.State == PlaybackState.Streaming);
+            panel.Hide(); await Pump();
+            discovery.Items = []; discovery.Publish(); await Pump();
+            Check(app.Snapshot.IsActive && !discovery.Running && engine.CreatedCount == previousConnections + 1
+                && engine.CreatedCount - engine.DisposedCount == 1, "suspension and absent discovery results do not interrupt playback", checks);
+            for (var i = 0; i < 10; i++) { panel.ShowPanel(); await Pump(); panel.Hide(); await Pump(); }
+            Check(discovery.Starts == discovery.Stops, "repeated panel visibility releases every discovery session", checks);
+        }
+        finally { settings.Close(); panel.ShutdownPanel(); }
+
+        var startupStore = new UiSmoke.MemoryStore(); var startupSettings = startupStore.Load();
+        startupSettings.Options("a").AutoConnect = true; startupStore.Save(startupSettings);
+        var startupDiscovery = new UiSmoke.MockDiscovery();
+        await using var startupApp = new AppViewModel(startupStore, startupDiscovery, new UiSmoke.MockAutostart(), new UiSmoke.MockAudio(), new UiSmoke.MockFactory(), Application.Current.Dispatcher);
+        startupApp.Start(); await startupApp.Startup; await Pump();
+        Check(startupDiscovery.Running && startupDiscovery.Starts == 1, "per-device automatic connection starts bounded startup discovery", checks);
+
+        var visibleStore = new UiSmoke.MemoryStore(); var visibleSettings = visibleStore.Load();
+        visibleSettings.AutoConnectOnDiscover = true; visibleStore.Save(visibleSettings);
+        var visibleDiscovery = new UiSmoke.MockDiscovery { Items = [] };
+        await using var visibleApp = new AppViewModel(visibleStore, visibleDiscovery, new UiSmoke.MockAutostart(), new UiSmoke.MockAudio(), new UiSmoke.MockFactory(), Application.Current.Dispatcher);
+        visibleApp.SetPanelVisible(true); visibleApp.Start(); await visibleApp.Startup; await Pump();
+        await Task.Delay(TimeSpan.FromMilliseconds(10500)); await Pump();
+        Check(!startupDiscovery.Running && startupDiscovery.Stops == 1, "startup discovery stops after ten seconds without visible receiver lists", checks);
+        Check(visibleDiscovery.Running && visibleDiscovery.Starts == 1 && visibleApp.DiscoveryEmptyTitle == L.Get("No receivers found"), "visible list outlives startup scan and empty search settles after ten seconds", checks);
+        visibleApp.SetPanelVisible(false); await Pump();
+        Check(!visibleDiscovery.Running && visibleDiscovery.Stops == 1, "hiding list after startup deadline stops its remaining discovery demand", checks);
+
+        var hiddenStore = new UiSmoke.MemoryStore(); var hiddenSettings = hiddenStore.Load();
+        hiddenSettings.Options("a").AutoConnect = true; hiddenSettings.Options("a").Hidden = true; hiddenStore.Save(hiddenSettings);
+        var hiddenDiscovery = new UiSmoke.MockDiscovery();
+        await using var hiddenApp = new AppViewModel(hiddenStore, hiddenDiscovery, new UiSmoke.MockAutostart(), new UiSmoke.MockAudio(), new UiSmoke.MockFactory(), Application.Current.Dispatcher);
+        hiddenApp.Start(); await hiddenApp.Startup; await Pump();
+        Check(hiddenDiscovery.Starts == 0, "hidden per-device automatic connection does not request startup discovery", checks);
+    }
+    private static async Task RunCompactPanelRegressionAsync(List<string> checks, string directory)
+    {
+        var left = new Receiver("compact-left", "家庭影院", "127.0.0.1");
+        var right = new Receiver("compact-right", "家庭影院 (2)", "127.0.0.2");
+        var stereo = new Receiver("stereo:compact", left.Name, left.Address) { Members = [left, right] };
+        foreach (var receiver in new[] { left, stereo })
+        {
+            var label = receiver.IsGroup ? "stereo" : "single";
+            var store = new UiSmoke.MemoryStore(); var saved = store.Load();
+            saved.LatencyMode = "realtime"; store.Save(saved);
+            var engine = new UiSmoke.MockFactory();
+            await using var app = new AppViewModel(store, new UiSmoke.MockDiscovery { Items = [receiver] },
+                new UiSmoke.MockAutostart(), new UiSmoke.MockAudio(), engine, Application.Current.Dispatcher);
+            app.SetPanelVisible(true); app.Start(); await app.Startup; await Pump();
+            var panel = new ControlPanel(app);
+            try
+            {
+                await app.Session.StartAsync(receiver, app.Settings);
+                await Until(() => app.Snapshot.State == PlaybackState.Streaming);
+                foreach (var member in receiver.Peers)
+                    engine.EmitEvent!(new { @event = "negotiated", receiver_id = member.Id, host = member.Address,
+                        codec = "alac", transport = "realtime", timing = "ptp", requested_latency_ms = 120, effective_latency_ms = 120 });
+                engine.EmitEvent!(new { @event = "capture_metrics", metrics = new { underrun_packets = 0 } });
+                var count = receiver.Peers.Count();
+                await Until(() => app.LatencyDetail.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length == count);
+                panel.ShowPanel(); await Pump();
+                var status = (TextBlock)panel.FindName("StatusDetailText");
+                var latency = (TextBlock)panel.FindName("LatencyDetailText");
+                Check(status.Visibility == Visibility.Collapsed && latency.IsVisible
+                    && latency.ActualHeight <= count * latency.LineHeight + 1,
+                    $"{label}: normal playback shows one latency line per HomePod without duplicate summary or policy rows", checks);
+                Check(app.StatusDetail.Length > 0 && app.Diagnostics().Contains(app.StatusDetail, StringComparison.Ordinal),
+                    $"{label}: the full status summary remains available to monitoring and diagnostics", checks);
+                for (var i = 0; i < 4; i++)
+                {
+                    panel.Hide(); panel.ShowPanel(); panel.Place(); await Pump();
+                    Check(Math.Abs(panel.ActualWidth - 400) <= 1,
+                        $"{label}: opening {i + 1} keeps the panel at 400 DIP", checks);
+                }
+                var controls = UiSmoke.Descendants(panel).OfType<FrameworkElement>()
+                    .Where(element => element.IsVisible && element is Button or ComboBox or Slider).ToArray();
+                Check(controls.All(element =>
+                {
+                    var origin = element.TranslatePoint(new(0, 0), panel);
+                    return origin.X >= 0 && origin.X + element.ActualWidth <= panel.ActualWidth + 1;
+                }) && controls.OfType<Slider>().All(slider => slider.ActualWidth >= 60),
+                    $"{label}: volume sliders, buttons and latency selector fit the compact panel", checks);
+                await CheckCompactVolumeLayoutAsync(panel, app, engine, receiver, label, checks, directory);
+                foreach (var scale in new[] { 1d, 1.25d, 1.5d, 2d })
+                    UiSmoke.Render(panel, Path.Combine(directory, $"compact-panel-{label}-{scale * 100}.png"), scale);
+                var playingHeight = panel.ActualHeight;
+                await app.Session.StopAsync();
+                await Until(() => app.Snapshot.State == PlaybackState.Idle); await Pump();
+                Check(status.IsVisible && latency.Visibility == Visibility.Collapsed && app.LatencyDetail.Length == 0
+                    && (count == 1 || panel.ActualHeight < playingHeight),
+                    $"{label}: stopping clears latency rows and their spacing, and restores the ready prompt", checks);
+                UiSmoke.Render(panel, Path.Combine(directory, $"compact-panel-{label}-stopped.png"), 1);
+            }
+            finally { panel.ShutdownPanel(); }
+        }
+    }
+    private static async Task CheckCompactVolumeLayoutAsync(ControlPanel panel, AppViewModel app,
+        UiSmoke.MockFactory engine, Receiver receiver, string label, List<string> checks, string directory)
+    {
+        var sliders = UiSmoke.Descendants(panel).OfType<Slider>().Where(slider => slider.IsVisible).ToArray();
+        var master = sliders.Single(slider => AutomationProperties.GetName(slider) == L.Get("Master volume"));
+        var device = sliders.Single(slider => AutomationProperties.GetName(slider) == L.Get("Device volume"));
+        var masterRow = (Grid)master.Parent;
+        var title = masterRow.Children.OfType<TextBlock>().Single(text => Grid.GetColumn(text) == 0);
+        var gap = master.TranslatePoint(new(), masterRow).X - title.TranslatePoint(new(title.ActualWidth, 0), masterRow).X;
+        Check(Math.Abs(gap - 8) <= 1,
+            $"{label}: master volume uses only an 8 DIP gap after its localized label", checks);
+
+        var deviceRow = (Grid)device.Parent;
+        var status = deviceRow.Children.OfType<TextBlock>().Single(text => Grid.GetRow(text) == 1);
+        var row = (ReceiverViewModel)device.DataContext;
+        var deviceWidth = device.ActualWidth;
+        var rowHeight = deviceRow.ActualHeight;
+        CheckStatus(false, "confirmed");
+        checks.Add($"{label}: volume layout measured at {VisualTreeHelper.GetDpi(panel).PixelsPerDip * 100:0}% physical display scaling");
+
+        device.SetCurrentValue(Slider.ValueProperty, 50d);
+        await Until(() => row.VolumeStatus == L.Get("Synchronizing…")); await Pump();
+        CheckStatus(true, "pending");
+        UiSmoke.Render(panel, Path.Combine(directory, $"compact-volume-{label}-pending-125.png"), 1.25);
+        await Until(() => row.Volume == 50 && row.VolumeStatus.Length == 0); await Pump();
+        CheckStatus(false, "confirmed after edit");
+        foreach (var state in new[] { "unconfirmed", "unsynced", "confirmed" })
+        {
+            engine.EmitEvent!(new { @event = "device_volume", host = receiver.Address, volume = 50,
+                sequence = app.ReceiverVolume(receiver.Id).Sequence, status = state, available = true });
+            await Until(() => app.ReceiverVolume(receiver.Id).Status == state); await Pump();
+            CheckStatus(state != "confirmed", state);
+        }
+
+        foreach (var slider in new[] { master, device })
+        {
+            slider.SetCurrentValue(Slider.ValueProperty, 50d);
+            if (slider == device) await Until(() => row.Volume == 50 && row.VolumeStatus.Length == 0);
+            await Pump();
+            var track = (Track)slider.Template.FindName("PART_Track", slider);
+            var travel = track.ActualWidth - track.Thumb.ActualWidth;
+            foreach (var value in new[] { 0, 50, 100 })
+            {
+                var position = track.Thumb.ActualWidth / 2 + travel * value / 100;
+                var point = track.TranslatePoint(new(position, track.ActualHeight / 2), slider);
+                Check(slider.InputHitTest(point) is DependencyObject hit && (hit == slider || slider.IsAncestorOf(hit))
+                    && VolumeSliderMath.ValueFromPosition(position, track.ActualWidth, track.Thumb.ActualWidth, 0, 100) == value,
+                    $"{label}: {AutomationProperties.GetName(slider)} track is clickable at {value}%", checks);
+            }
+            foreach (var value in new[] { 100, 0, 50 })
+            {
+                var delta = (value - slider.Value) / 100 * (track.ActualWidth - track.Thumb.ActualWidth);
+                track.Thumb.RaiseEvent(new DragDeltaEventArgs(delta, 0) { RoutedEvent = Thumb.DragDeltaEvent });
+                await Until(() => slider == master ? app.MasterVolume == value : row.Volume == value && row.VolumeStatus.Length == 0);
+                await Pump();
+                var grid = (Grid)slider.Parent;
+                var percent = grid.Children.OfType<TextBlock>().Single(text => Grid.GetRow(text) == 0 && Grid.GetColumn(text) == 2);
+                var button = grid.Children.OfType<Button>().Single();
+                Check(slider.Value == value && percent.Text == $"{value}%"
+                    && slider.TranslatePoint(new(slider.ActualWidth, 0), grid).X <= percent.TranslatePoint(new(), grid).X + 1
+                    && percent.TranslatePoint(new(percent.ActualWidth, 0), grid).X <= button.TranslatePoint(new(), grid).X,
+                    $"{label}: dragging {AutomationProperties.GetName(slider)} to {value}% preserves binding and non-overlapping readout", checks);
+                CheckMuteButton(slider, button);
+            }
+        }
+
+        var deviceMute = deviceRow.Children.OfType<Button>().Single();
+        await InvokeAsync(deviceMute); await Until(() => row.Muted && row.VolumeStatus.Length == 0);
+        await Pump(); CheckMuteButton(device, deviceMute);
+        UiSmoke.Render(panel, Path.Combine(directory, $"compact-volume-{label}-muted-125.png"), 1.25);
+        await InvokeAsync(deviceMute); await Until(() => row.Volume == 50 && row.VolumeStatus.Length == 0);
+        Check(!row.Muted, $"{label}: device mute button restores the volume after layout changes", checks);
+        var masterMute = masterRow.Children.OfType<Button>().Single();
+        await InvokeAsync(masterMute); await Until(() => app.Muted);
+        await Pump(); CheckMuteButton(master, masterMute);
+        UiSmoke.Render(panel, Path.Combine(directory, $"compact-volume-{label}-master-muted-125.png"), 1.25);
+        await InvokeAsync(masterMute); await Until(() => !app.Muted);
+        Check(app.MasterVolume == 50, $"{label}: master mute button preserves the volume after layout changes", checks);
+        master.SetCurrentValue(Slider.ValueProperty, 100d); await Pump();
+
+        static async Task InvokeAsync(Button button)
+        {
+            await Until(() => button.IsEnabled);
+            ((IInvokeProvider)new ButtonAutomationPeer(button).GetPattern(PatternInterface.Invoke)!).Invoke();
+        }
+
+        void CheckMuteButton(Slider slider, Button button)
+        {
+            CheckAlignedSliders();
+            var text = UiSmoke.Descendants(button).OfType<TextBlock>().Single();
+            var bounds = text.TransformToAncestor(button).TransformBounds(new Rect(text.RenderSize));
+            Check(slider.ActualWidth >= 60 && bounds.Left >= 0 && bounds.Right <= button.ActualWidth + 1
+                && bounds.Top >= 0 && bounds.Bottom <= button.ActualHeight + 1
+                && text.ActualWidth + 1 >= text.DesiredSize.Width && text.ActualHeight + 1 >= text.DesiredSize.Height,
+                $"{label}: {AutomationProperties.GetName(slider)} '{button.Content}' fits while retaining a usable slider", checks);
+        }
+
+        void CheckStatus(bool visible, string state)
+        {
+            CheckAlignedSliders();
+            Check(Math.Abs(device.ActualWidth - deviceWidth) <= 1
+                && (visible ? status.IsVisible && status.TranslatePoint(new(), deviceRow).Y >= device.ActualHeight
+                    : status.Visibility == Visibility.Collapsed && Math.Abs(deviceRow.ActualHeight - rowHeight) <= 1),
+                $"{label}: {state} volume status sits below a stable-width slider and leaves no empty row", checks);
+        }
+
+        void CheckAlignedSliders()
+        {
+            var masterStart = master.TranslatePoint(new(), panel).X;
+            var deviceStart = device.TranslatePoint(new(), panel).X;
+            Check(Math.Abs(masterStart - deviceStart) <= 1 && Math.Abs(master.ActualWidth - device.ActualWidth) <= 1,
+                $"{label}: device and master volume tracks share the same start and width", checks);
+        }
+    }
     private static async Task Pump() { await Application.Current.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle); await Task.Delay(20); }
     private static async Task Until(Func<bool> condition)
     {

@@ -1,7 +1,7 @@
 //! Versioned JSONL qualification interface. stdout is exclusively structured IPC.
 use airflash_engine::{
     rtsp::Cancellation,
-    session::{ProbeOptions, probe_with_controls},
+    session::{ProbeOptions, probe_with_all_controls},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -27,7 +27,7 @@ struct Request {
     #[serde(default)]
     params: Value,
 }
-fn send(id: &str, session: &str, mut event: Value) {
+fn envelope(id: &str, session: &str, mut event: Value) -> Value {
     if event["event"] == "error" && event.get("code").is_none() {
         event["code"] = json!("command_error");
         event["host"] = Value::Null;
@@ -37,6 +37,10 @@ fn send(id: &str, session: &str, mut event: Value) {
     event["version"] = json!(1);
     event["id"] = json!(id);
     event["session_id"] = json!(session);
+    event
+}
+fn send(id: &str, session: &str, event: Value) {
+    let event = envelope(id, session, event);
     let mut stdout = io::stdout().lock();
     let _ = writeln!(stdout, "{event}");
     let _ = stdout.flush();
@@ -46,9 +50,11 @@ struct Running {
     cancel: Cancellation,
     worker: Option<JoinHandle<()>>,
     gain: std::sync::Arc<std::sync::atomic::AtomicU32>,
-    pending_pin: Option<std::sync::mpsc::Sender<String>>,
+    pending_pin: Option<std::sync::mpsc::Sender<zeroize::Zeroizing<String>>>,
     gain_limit: f64,
+    force_latency: bool,
     volume: airflash_engine::volume::Control,
+    standby: airflash_engine::standby::Control,
     equalizer: Option<(airflash_engine::equalizer::Control, u32)>,
 }
 impl Drop for Running {
@@ -59,6 +65,125 @@ impl Drop for Running {
         }
     }
 }
+fn capabilities() -> Vec<&'static str> {
+    let mut values = vec![
+        "receiver_profiles",
+        "receiver_capabilities",
+        "software_stereo",
+        "continuity",
+        "buffered_audio",
+        "member_volume",
+        "receiver_password",
+        "standby_release",
+        "receiver_ownership_guard",
+        "now_playing",
+        "diagnostics",
+        "forced_latency",
+        "adaptive_lead_v2",
+    ];
+    if airflash_engine::applications::supported() {
+        values.push("application_capture");
+    }
+    values
+}
+
+fn lead_event(running: Option<&Running>, session: &str, params: &Value) -> Value {
+    let result = (|| -> anyhow::Result<i64> {
+        let running = running
+            .filter(|r| r.id == session && r.equalizer.is_some() && !r.cancel.is_cancelled())
+            .ok_or_else(|| anyhow::anyhow!("lead session is no longer active"))?;
+        anyhow::ensure!(
+            !running.force_latency,
+            "Runtime lead changes are disabled by forced latency"
+        );
+        let ms = params
+            .get("ms")
+            .or_else(|| params.get("lead_ms"))
+            .and_then(Value::as_i64)
+            .ok_or_else(|| anyhow::anyhow!("set_lead needs an integer ms"))?;
+        anyhow::ensure!(
+            (0..=airflash_engine::session::MAX_LEAD_MS).contains(&ms),
+            "lead must be 0..2000 ms"
+        );
+        if let Some(sequence) = params.get("sequence") {
+            let sequence = sequence
+                .as_u64()
+                .ok_or_else(|| anyhow::anyhow!("lead sequence must be positive"))?;
+            let epoch = params
+                .get("session_epoch")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| anyhow::anyhow!("lead session_epoch is required"))?;
+            airflash_engine::session::request_lead_for(ms, sequence, epoch)?;
+        } else {
+            airflash_engine::session::request_lead(ms);
+        }
+        Ok(ms)
+    })();
+    match result {
+        Ok(ms) => {
+            json!({"event":"lead_requested","ms":ms,"sequence":params.get("sequence"),"session_epoch":params.get("session_epoch")})
+        }
+        Err(error) => {
+            json!({"event":"lead_error","message":error.to_string(),"sequence":params.get("sequence"),"session_epoch":params.get("session_epoch")})
+        }
+    }
+}
+
+/// Monotonic sequence for metadata updates: the worker ignores stale ones.
+static NEXT_METADATA: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn equalizer_event(running: Option<&Running>, session: &str, params: Value) -> Value {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Update {
+        sequence: u64,
+        equalizer: airflash_engine::equalizer::Settings,
+    }
+    let sequence = params.get("sequence").cloned().unwrap_or(Value::Null);
+    let result = (|| -> anyhow::Result<_> {
+        let update: Update = serde_json::from_value(params)?;
+        anyhow::ensure!(update.sequence > 0, "equalizer sequence must be positive");
+        let running = running
+            .filter(|r| r.id == session)
+            .ok_or_else(|| anyhow::anyhow!("equalizer session is no longer active"))?;
+        let (control, rate) = running
+            .equalizer
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("equalizer updates require a live streaming session"))?;
+        let prepared = airflash_engine::equalizer::Prepared::new(update.equalizer, *rate)?;
+        let retained = control.set(update.sequence, prepared);
+        match retained.outcome {
+            airflash_engine::equalizer::SetOutcome::Accepted
+            | airflash_engine::equalizer::SetOutcome::Idempotent => Ok(retained),
+            airflash_engine::equalizer::SetOutcome::Stale => {
+                anyhow::bail!(
+                    "equalizer sequence is older than the retained sequence {}",
+                    retained.sequence
+                )
+            }
+            airflash_engine::equalizer::SetOutcome::Conflict => {
+                anyhow::bail!(
+                    "equalizer sequence {} conflicts with the retained preparation",
+                    retained.sequence
+                )
+            }
+        }
+    })();
+    match result {
+        Ok(retained) => json!({
+            "event": "equalizer_changed",
+            "sequence": retained.sequence,
+            "auto_attenuation_db": retained.prepared.auto_attenuation_db,
+            "effective_preamp_db": retained.prepared.effective_preamp_db,
+        }),
+        Err(error) => json!({
+            "event": "equalizer_error",
+            "sequence": sequence,
+            "message": error.to_string(),
+        }),
+    }
+}
+
 fn main() {
     let mut running: Option<Running> = None;
     // Limit individual IPC commands; no unbounded read_line allocation.
@@ -101,7 +226,9 @@ fn main() {
             );
             continue;
         }
-        let request: Request = match serde_json::from_slice(&bytes) {
+        let parsed = serde_json::from_slice(&bytes);
+        bytes.fill(0);
+        let mut request: Request = match parsed {
             Ok(r) => r,
             Err(e) => {
                 send("", "", json!({"event":"error","message":e.to_string()}));
@@ -120,10 +247,71 @@ fn main() {
             "hello" => send(
                 &request.id,
                 &request.session_id,
-                json!({"event":"hello","engine_version":env!("CARGO_PKG_VERSION"),"mode":"native","qualification":"partial","live_loopback":LIVE_LOOPBACK_SUPPORTED,"commands":["hello","start","probe","stop","set_gain","set_equalizer","set_device_volume","pair","pair_pin"],"production_ready":false}),
+                json!({"event":"hello","engine_version":env!("CARGO_PKG_VERSION"),"mode":"native","qualification":"experimental","live_loopback":true,"capabilities":capabilities(),"commands":["hello","get_receiver_capabilities","list_applications","start","probe","stop","set_gain","set_equalizer","set_standby","set_device_volume","set_lead","set_now_playing","pair","pair_pin"],"production_ready":false}),
             ),
+            "get_receiver_capabilities" => {
+                let result = (|| -> anyhow::Result<_> {
+                    let peers: Vec<airflash_engine::session::Peer> = serde_json::from_value(
+                        request.params.get("peers").cloned().unwrap_or(Value::Null),
+                    )?;
+                    anyhow::ensure!(
+                        !peers.is_empty() && peers.len() <= 2,
+                        "capability query requires one or two receivers"
+                    );
+                    airflash_engine::receiver_capabilities::query_group(
+                        &peers,
+                        Cancellation::default(),
+                    )
+                })();
+                match result {
+                    Ok(members) => send(
+                        &request.id,
+                        &request.session_id,
+                        json!({"event":"receiver_capabilities","members":members}),
+                    ),
+                    Err(error) => send(
+                        &request.id,
+                        &request.session_id,
+                        airflash_engine::transport::error_event(&error),
+                    ),
+                }
+            }
+            "list_applications" => match airflash_engine::applications::list() {
+                Ok(items) => send(
+                    &request.id,
+                    &request.session_id,
+                    json!({"event":"applications","items":items}),
+                ),
+                Err(error) => send(
+                    &request.id,
+                    &request.session_id,
+                    json!({"event":"error","message":error.to_string()}),
+                ),
+            },
+            "set_standby" => {
+                let result = (|| -> anyhow::Result<()> {
+                    let settings = serde_json::from_value(request.params)?;
+                    let running = running
+                        .as_ref()
+                        .filter(|r| r.id == request.session_id && r.equalizer.is_some())
+                        .ok_or_else(|| anyhow::anyhow!("standby requires a live session"))?;
+                    running.standby.set(settings)
+                })();
+                match result {
+                    Ok(()) => send(
+                        &request.id,
+                        &request.session_id,
+                        json!({"event":"standby_changed"}),
+                    ),
+                    Err(error) => send(
+                        &request.id,
+                        &request.session_id,
+                        json!({"event":"error","message":error.to_string()}),
+                    ),
+                }
+            }
             "probe" | "start" => {
-                let options: ProbeOptions = match serde_json::from_value(request.params) {
+                let mut options: ProbeOptions = match serde_json::from_value(request.params) {
                     Ok(o) => o,
                     Err(e) => {
                         send(
@@ -134,6 +322,9 @@ fn main() {
                         continue;
                     }
                 };
+                // Not a wire parameter: the end-of-session summary needs an id to
+                // correlate a CSV row with the desktop's session log.
+                options.report_session_id = request.session_id.clone();
                 if let Err(e) = if request.command == "start" {
                     options.validate_start()
                 } else {
@@ -149,6 +340,8 @@ fn main() {
                 if let Some(old) = running.take() {
                     drop(old);
                 }
+                airflash_engine::session::reset_lead();
+                airflash_engine::metadata::global().clear();
                 let cancel = Cancellation::default();
                 let worker_cancel = cancel.clone();
                 let session = request.session_id.clone();
@@ -157,14 +350,26 @@ fn main() {
                 let worker_gain = gain.clone();
                 let volume = airflash_engine::volume::Control::default();
                 let worker_volume = volume.clone();
+                let standby = airflash_engine::standby::Control::new(options.standby);
+                let worker_standby = standby.clone();
                 let gain_limit = if request.command == "probe" { 0.1 } else { 1.0 };
                 let rate = options.sample_rate;
-                let equalizer = airflash_engine::equalizer::Control::new(options.equalizer, rate).unwrap();
+                let force_latency = options.force_latency;
+                let equalizer =
+                    airflash_engine::equalizer::Control::new(options.equalizer, rate).unwrap();
                 let worker_equalizer = equalizer.clone();
                 let live_equalizer = (request.command == "start").then_some((equalizer, rate));
                 let worker = thread::spawn(move || {
                     let emit = |e| send(&request.id, &request.session_id, e);
-                    if let Err(error) = probe_with_controls(options, worker_cancel, worker_gain, worker_volume, worker_equalizer, emit) {
+                    if let Err(error) = probe_with_all_controls(
+                        options,
+                        worker_cancel,
+                        worker_gain,
+                        worker_volume,
+                        worker_equalizer,
+                        worker_standby,
+                        emit,
+                    ) {
                         emit(airflash_engine::transport::error_event(&error));
                     }
                 });
@@ -175,39 +380,53 @@ fn main() {
                     gain,
                     pending_pin: None,
                     gain_limit,
+                    force_latency,
                     volume,
+                    standby,
                     equalizer: live_equalizer,
                 });
             }
             "set_device_volume" => {
-                if let Some(r) = running.as_ref().filter(|r| r.id == request.session_id && r.pending_pin.is_none()) {
+                if let Some(r) = running
+                    .as_ref()
+                    .filter(|r| r.id == request.session_id && r.pending_pin.is_none())
+                {
                     if let (Some(percent), Some(sequence)) = (
-                        request.params.get("volume").and_then(Value::as_u64).filter(|v| *v <= 100),
-                        request.params.get("sequence").and_then(Value::as_u64).filter(|v| *v > 0)) {
-                        r.volume.set(airflash_engine::volume::Command { sequence, percent: percent as u8 });
+                        request
+                            .params
+                            .get("volume")
+                            .and_then(Value::as_u64)
+                            .filter(|v| *v <= 100),
+                        request
+                            .params
+                            .get("sequence")
+                            .and_then(Value::as_u64)
+                            .filter(|v| *v > 0),
+                    ) {
+                        let command = airflash_engine::volume::Command {
+                            sequence,
+                            percent: percent as u8,
+                        };
+                        if let Some(host) = request.params.get("host").and_then(Value::as_str) {
+                            r.volume.set_member(host, command);
+                        } else {
+                            r.volume.set(command);
+                        }
                     } else {
-                        send(&request.id, &request.session_id, json!({"event":"device_volume_error","message":"invalid device volume command"}));
+                        send(
+                            &request.id,
+                            &request.session_id,
+                            json!({"event":"device_volume_error","message":"invalid device volume command"}),
+                        );
                     }
                 }
             }
             "set_equalizer" => {
-                #[derive(Deserialize)]
-                #[serde(deny_unknown_fields)]
-                struct Update { sequence: u64, equalizer: airflash_engine::equalizer::Settings }
-                let sequence = request.params.get("sequence").cloned().unwrap_or(Value::Null);
-                let result = (|| -> anyhow::Result<_> {
-                    let update: Update = serde_json::from_value(request.params)?;
-                    anyhow::ensure!(update.sequence > 0, "equalizer sequence must be positive");
-                    let r = running.as_ref().filter(|r| r.id == request.session_id).ok_or_else(|| anyhow::anyhow!("equalizer session is no longer active"))?;
-                    let (control, rate) = r.equalizer.as_ref().ok_or_else(|| anyhow::anyhow!("equalizer updates require a live streaming session"))?;
-                    let prepared = airflash_engine::equalizer::Prepared::new(update.equalizer, *rate)?;
-                    control.set(update.sequence, prepared);
-                    Ok(prepared)
-                })();
-                match result {
-                    Ok(prepared) => send(&request.id, &request.session_id, json!({"event":"equalizer_changed","sequence":sequence,"auto_attenuation_db":prepared.auto_attenuation_db,"effective_preamp_db":prepared.effective_preamp_db})),
-                    Err(error) => send(&request.id, &request.session_id, json!({"event":"equalizer_error","sequence":sequence,"message":error.to_string()})),
-                }
+                send(
+                    &request.id,
+                    &request.session_id,
+                    equalizer_event(running.as_ref(), &request.session_id, request.params),
+                );
             }
             "set_gain" => {
                 if let Some(r) = running.as_ref().filter(|r| r.id == request.session_id) {
@@ -233,13 +452,47 @@ fn main() {
                     }
                 }
             }
+            "set_now_playing" => {
+                let result = (|| -> anyhow::Result<_> {
+                    anyhow::ensure!(
+                        running.as_ref().is_some_and(|r| r.id == request.session_id
+                            && r.equalizer.is_some()
+                            && !r.cancel.is_cancelled()),
+                        "metadata session is no longer active"
+                    );
+                    let now: airflash_engine::metadata::NowPlaying =
+                        serde_json::from_value(request.params)?;
+                    anyhow::ensure!(
+                        [&now.title, &now.artist, &now.album, &now.genre]
+                            .iter()
+                            .all(|text| text.len() <= 4096),
+                        "metadata text is too long"
+                    );
+                    let sequence = NEXT_METADATA.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    airflash_engine::metadata::global().set(sequence, now);
+                    Ok(sequence)
+                })();
+                let event = match result {
+                    Ok(sequence) => json!({"event":"metadata_accepted","sequence":sequence}),
+                    Err(error) => json!({"event":"metadata_error","message":error.to_string()}),
+                };
+                send(&request.id, &request.session_id, event);
+            }
+            "set_lead" => {
+                send(
+                    &request.id,
+                    &request.session_id,
+                    lead_event(running.as_ref(), &request.session_id, &request.params),
+                );
+            }
             "pair_pin" => {
                 if let Some(r) = running.as_ref().filter(|r| r.id == request.session_id) {
-                    if let (Some(channel), Some(pin)) = (
-                        &r.pending_pin,
-                        request.params.get("pin").and_then(Value::as_str),
-                    ) {
-                        let _ = channel.send(pin.to_owned());
+                    if let (Some(channel), Some(pin)) =
+                        (&r.pending_pin, request.params.get_mut("pin"))
+                    {
+                        if let Value::String(secret) = pin.take() {
+                            let _ = channel.send(zeroize::Zeroizing::new(secret));
+                        }
                     }
                 }
             }
@@ -263,7 +516,12 @@ fn main() {
                 let cancel = Cancellation::default();
                 let child_cancel = cancel.clone();
                 let session = request.session_id.clone();
-                let (tx, rx) = std::sync::mpsc::channel::<String>();
+                let (tx, rx) = std::sync::mpsc::channel::<zeroize::Zeroizing<String>>();
+                let password_required = request
+                    .params
+                    .get("password_required")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
                 let worker = thread::spawn(move || {
                     let result = (|| -> anyhow::Result<()> {
                         let mut conn = airflash_engine::rtsp::Connection::connect(
@@ -277,11 +535,11 @@ fn main() {
                             .and_then(plist::Value::as_string)
                             .ok_or_else(|| anyhow::anyhow!("missing device identifier"))?
                             .to_owned();
-                        let credentials = airflash_engine::auth::pair_prompt(&mut conn, || {
+                        let get_secret = || {
                             send(
                                 &request.id,
                                 &request.session_id,
-                                json!({"event":"pin_required","host":peer.host}),
+                                json!({"event":if password_required {"password_required"}else{"pin_required"},"host":peer.host}),
                             );
                             let deadline =
                                 std::time::Instant::now() + std::time::Duration::from_secs(120);
@@ -292,17 +550,29 @@ fn main() {
                                     "PIN entry timed out"
                                 );
                                 match rx.recv_timeout(std::time::Duration::from_millis(100)) {
-                                    Ok(pin) => return Ok(pin),
+                                    Ok(mut pin) => return Ok(std::mem::take(&mut *pin)),
                                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                                     Err(_) => anyhow::bail!("PIN entry cancelled"),
                                 }
                             }
-                        })?;
-                        airflash_engine::credentials::save(
-                            &airflash_engine::credentials::directory(),
-                            &device_id,
-                            &credentials,
-                        )?;
+                        };
+                        if password_required {
+                            let password = zeroize::Zeroizing::new(get_secret()?);
+                            airflash_engine::auth::transient_password(&mut conn, &password)?;
+                            airflash_engine::credentials::save_password(
+                                &airflash_engine::credentials::directory(),
+                                &device_id,
+                                &password,
+                            )?;
+                        } else {
+                            let credentials =
+                                airflash_engine::auth::pair_prompt(&mut conn, get_secret)?;
+                            airflash_engine::credentials::save(
+                                &airflash_engine::credentials::directory(),
+                                &device_id,
+                                &credentials,
+                            )?;
+                        }
                         send(
                             &request.id,
                             &request.session_id,
@@ -325,7 +595,9 @@ fn main() {
                     gain: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
                     pending_pin: Some(tx),
                     gain_limit: 0.0,
+                    force_latency: false,
                     volume: airflash_engine::volume::Control::default(),
+                    standby: airflash_engine::standby::Control::default(),
                     equalizer: None,
                 });
             }
@@ -336,6 +608,23 @@ fn main() {
                 }
                 send(&request.id, &request.session_id, json!({"event":"stopped"}));
             }
+            "diag_summary" => {
+                // One-shot, redacted snapshot for issue reports: hosts and paths
+                // become stable pseudonyms, credentials are dropped, and every
+                // counter keeps its value.
+                let latest =
+                    airflash_engine::telemetry::redact(&airflash_engine::telemetry::diagnostics());
+                send(
+                    &request.id,
+                    &request.session_id,
+                    json!({
+                        "event": "diag_summary",
+                        "engine_version": env!("CARGO_PKG_VERSION"),
+                        "qualification": "experimental",
+                        "session": latest,
+                    }),
+                );
+            }
             _ => send(
                 &request.id,
                 &request.session_id,
@@ -345,5 +634,176 @@ fn main() {
     }
     if let Some(old) = running {
         drop(old);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use airflash_engine::equalizer::{Control, Prepared, Settings};
+
+    // A stored start slot exercises the production handler without sockets,
+    // capture, or a worker-liveness contract.
+    fn stored_start(rate: u32) -> Running {
+        Running {
+            id: "eq-session".to_owned(),
+            cancel: Cancellation::default(),
+            worker: None,
+            gain: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            pending_pin: None,
+            gain_limit: 1.0,
+            force_latency: false,
+            volume: airflash_engine::volume::Control::default(),
+            standby: airflash_engine::standby::Control::default(),
+            equalizer: Some((Control::new(Settings::default(), rate).unwrap(), rate)),
+        }
+    }
+
+    #[test]
+    fn forced_lead_commands_are_nonfatal_and_leave_the_current_lead_untouched() {
+        let mut running = stored_start(44100);
+        running.force_latency = true;
+        airflash_engine::session::request_lead(40);
+        for params in [
+            json!({"ms":10}),
+            json!({"ms":-1}),
+            json!({"ms":"bad"}),
+            Value::Null,
+        ] {
+            let reply = lead_event(Some(&running), "eq-session", &params);
+            assert_eq!(reply["event"], "lead_error");
+            assert!(reply.get("retryable").is_none());
+            assert_eq!(airflash_engine::session::requested_lead(), 40);
+            assert!(!running.cancel.is_cancelled());
+        }
+        running.force_latency = false;
+        assert_eq!(
+            lead_event(Some(&running), "eq-session", &json!({"ms":10}))["event"],
+            "lead_requested"
+        );
+        assert_eq!(airflash_engine::session::requested_lead(), 10);
+        airflash_engine::session::reset_lead();
+    }
+
+    fn reply(running: Option<&Running>, session: &str, params: Value) -> Value {
+        let event = envelope(
+            "eq-request",
+            session,
+            equalizer_event(running, session, params),
+        );
+        let serialized = serde_json::to_string(&event).unwrap();
+        let decoded: Value = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(decoded["version"], 1);
+        assert_eq!(decoded["id"], "eq-request");
+        assert_eq!(decoded["session_id"], session);
+        // EQ errors use their existing nonfatal event rather than terminal IPC.
+        assert!(decoded.get("retryable").is_none());
+        assert!(decoded.get("code").is_none());
+        decoded
+    }
+
+    #[test]
+    fn equalizer_replies_match_retained_mailbox_through_rejection_and_replay() {
+        for rate in [44100, 48000] {
+            let running = stored_start(rate);
+            let control = &running.equalizer.as_ref().unwrap().0;
+            let flat = Settings {
+                enabled: true,
+                ..Settings::default()
+            };
+            let quiet = Settings {
+                preamp_db: -12.0,
+                ..flat
+            };
+            let flat_prepared = Prepared::new(flat, rate).unwrap();
+            let quiet_prepared = Prepared::new(quiet, rate).unwrap();
+            assert_ne!(
+                flat_prepared.effective_preamp_db,
+                quiet_prepared.effective_preamp_db
+            );
+
+            for (sequence, submitted, expected_event, retained_sequence, retained, message) in [
+                (10, flat, "equalizer_changed", 10, flat_prepared, ""),
+                (9, quiet, "equalizer_error", 10, flat_prepared, "older"),
+                (10, quiet, "equalizer_error", 10, flat_prepared, "conflicts"),
+                (10, flat, "equalizer_changed", 10, flat_prepared, ""),
+                (11, quiet, "equalizer_changed", 11, quiet_prepared, ""),
+            ] {
+                let event = reply(
+                    Some(&running),
+                    "eq-session",
+                    json!({"sequence": sequence, "equalizer": submitted}),
+                );
+                assert_eq!(event["event"], expected_event);
+                assert_eq!(event["sequence"], sequence);
+                if expected_event == "equalizer_changed" {
+                    assert_eq!(event["auto_attenuation_db"], retained.auto_attenuation_db);
+                    assert_eq!(event["effective_preamp_db"], retained.effective_preamp_db);
+                } else {
+                    assert!(event["message"].as_str().unwrap().contains(message));
+                    assert!(event.get("auto_attenuation_db").is_none());
+                    assert!(event.get("effective_preamp_db").is_none());
+                }
+                assert_eq!(control.latest(), Some((retained_sequence, retained)));
+                assert!(running.cancel.check().is_ok());
+            }
+        }
+    }
+
+    #[test]
+    fn rejected_equalizer_commands_leave_the_slot_usable() {
+        let mut running = stored_start(44100);
+        let control = running.equalizer.as_ref().unwrap().0.clone();
+        let initial = control.latest().unwrap();
+        for params in [
+            Value::Null,
+            json!({"sequence":0,"equalizer":{}}),
+            json!({"sequence":-1,"equalizer":{}}),
+            json!({"sequence":1,"equalizer":{"band_gains_db":[1,2]}}),
+            json!({"sequence":2,"equalizer":{"preamp_db":13}}),
+            json!({"sequence":3,"equalizer":{"band_gains_db":[0,0,0,0,0,0,0,0,0,-13]}}),
+            json!({"sequence":4,"equalizer":{},"unexpected":true}),
+        ] {
+            let requested_sequence = params.get("sequence").cloned().unwrap_or(Value::Null);
+            let event = reply(Some(&running), "eq-session", params);
+            assert_eq!(event["event"], "equalizer_error");
+            assert_eq!(event["sequence"], requested_sequence);
+            assert!(!event["message"].as_str().unwrap().is_empty());
+            assert_eq!(control.latest(), Some(initial));
+            assert!(running.cancel.check().is_ok());
+        }
+        let valid = json!({"sequence":5,"equalizer":{"enabled":true,"preamp_db":-6}});
+        assert_eq!(
+            reply(Some(&running), "other-session", valid.clone())["event"],
+            "equalizer_error"
+        );
+        assert_eq!(
+            reply(None, "eq-session", valid.clone())["event"],
+            "equalizer_error"
+        );
+        assert_eq!(control.latest(), Some(initial));
+
+        // Probe and pairing entries both lack a live EQ control slot.
+        let live_slot = running.equalizer.take();
+        assert_eq!(
+            reply(Some(&running), "eq-session", valid.clone())["event"],
+            "equalizer_error"
+        );
+        let (pin, _received_pin) = std::sync::mpsc::channel();
+        running.pending_pin = Some(pin);
+        assert_eq!(
+            reply(Some(&running), "eq-session", valid.clone())["event"],
+            "equalizer_error"
+        );
+        assert_eq!(control.latest(), Some(initial));
+        assert!(running.cancel.check().is_ok());
+
+        running.pending_pin = None;
+        running.equalizer = live_slot;
+        let accepted = reply(Some(&running), "eq-session", valid);
+        assert_eq!(accepted["event"], "equalizer_changed");
+        assert_eq!(accepted["sequence"], 5);
+        assert_eq!(accepted["effective_preamp_db"], -6.0);
+        assert_eq!(control.latest().unwrap().0, 5);
     }
 }

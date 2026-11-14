@@ -1,4 +1,4 @@
-# <img src="../desktop/AirFlash.App/Assets/app.svg" width="36" height="36" alt="" style="vertical-align:middle" /> AirFlash Linux
+# <img src="../desktop/AirFlash.App/Assets/app.svg" width="36" height="36" alt="" style="vertical-align:middle" /> AirFlash
 
 <p align="center">
   <a href="../README.md">English</a> ·
@@ -8,14 +8,6 @@
 <p align="center">
   <img src="images/airflash-zh-CN.png" alt="AirFlash 中文界面" width="550" />
 </p>
-
-**AirFlash Linux** 是 AirFlash 的 Linux 版本：通过原生 AirPlay 2 发送端，把 Linux
-桌面音频流送到 HomePod 及 HomePod 立体声组合。提供 **Linux x86_64 与 aarch64
-（ARM64）** 的自包含 AppImage，既有 Avalonia 图形面板，也有无界面的
-`airflash-cli`，与 Windows 版共用同一个原生发送端。
-
-关键词：Linux AirPlay 2 发送端、Linux 向 HomePod 串流、HomePod 立体声组合、AirFlash
-AppImage、aarch64 / ARM64、TuneBlade 的 Linux 替代方案。
 
 AirFlash 支持现有的双 HomePod 立体声组合和 Windows 低延迟播放。
 通过原生 AirPlay 2 发送端，将 Windows 桌面声音发送到 HomePod，支持 HomePod OS 27。
@@ -27,66 +19,36 @@ AirFlash 是 TuneBlade（AirPlay 1）的 AirPlay 2 替代方案，旨在让 Wind
 
 从 [GitHub Releases](https://github.com/Ding-Kyoma/AirFlash/releases/latest) 下载并运行 `AirFlash-X.Y.Z.msi` 安装，或直接运行便携版 `AirFlash.exe`。
 
+最低兼容目标为 **Windows x64，Windows 10 1809 / Build 17763（LTSC 2019）**，
+同时覆盖 LTSC 2021、22H2 和 Windows 11。当前仍为兼容候选版本，需受影响用户实机验收。
+启动失败时可使用 Windows 自带 PowerShell 5.1 收集报告；步骤与验收范围见
+[Windows 兼容性与启动诊断](WINDOWS-COMPATIBILITY.md)。程序自包含，无需另装 .NET、Python 或 VC++ 运行库。
+
 AirFlash 提供 Windows x64 可执行文件和可独立运行的 MSI 安装包。由于发布文件没有代码签名，Windows
 可能显示 SmartScreen 警告。只有在确认下载文件来源可信时，才使用“更多信息”
 和“仍要运行”。
 
-在 Linux 上，从同一个 release 下载对应架构（`x86_64` 或 `aarch64`）的 `-full`
-AppImage，赋予执行权限后直接运行：
-
-```bash
-chmod +x AirFlash-X.Y.Z-x86_64-full.AppImage
-./AirFlash-X.Y.Z-x86_64-full.AppImage    # 打开图形面板
-```
-
-AppImage 是单个自包含文件，内含命令行、引擎和 .NET 运行时，无需安装、也不需要
-root。不带参数运行会打开图形面板，`gui` 强制打开面板，任何命令行子命令
-（`./AirFlash.AppImage discover`）仍走无界面二进制。想放到桌面菜单里，可把文件移到
-`~/Apps`，并把镜像内的 `airflash-ui.desktop` 复制到 `~/.local/share/applications/`。
-AppImage 没有代码签名，请对照 release 中的 `SHA256SUMS.txt` 校验。依赖和已知限制
-见 [docs/LINUX.md](LINUX.md)。
-
-## Linux（无界面预览）
-
-<p align="center">
-  <img src="images/airflash-linux-gnome.png" alt="AirFlash 在 Linux（GNOME）上的界面" width="420" />
-</p>
-
-Linux 提供两种形态，复用的是同一个原生 AirPlay 2 发送端：
-
-- **无界面命令行** `airflash-cli`：发现、配对、后台播放、停止、查看状态与日志、
-  调节音量，全程不需要图形桌面。
-- **图形面板** `AirFlash.UI`（Avalonia）：与 Windows 版相同的面板布局、接收器
-  列表、单设备音量、均衡器、诊断与设置，直接复用共享的 .NET Core 层。
-
-该预览**尚未实现桌面音频采集**（PipeWire/PulseAudio），因此面板播放确定性测试信号
-或指定 WAV 文件。整条传输链路是真实的、可测试的，这个限制在界面和文档中都已明确
-说明，而不是被隐藏。
-
-```bash
-airflash-cli discover
-airflash-cli pair --host 192.168.1.42
-airflash-cli start --host 192.168.1.42 --source simulated --daemon
-airflash-cli status
-airflash-cli logs
-airflash-cli stop
-```
-
-可重复执行的构建会产出 x86_64 AppImage，`systemd --user` 单元可在普通用户下后台
-运行，无需 root。依赖、构建步骤、systemd 配置、AppImage 结构、音频边界和已知限制
-见 [LINUX.md](LINUX.md)。
+音频采集建议在 **设置 > 音频采集** 中使用 **指定音频端点**。如果没有空闲可用的音频端点，
+可以下载安装 [Virtual Audio Cable（VAC Lite）](https://software.muzychenko.net/freeware/vac471lite.zip)
+等工具创建虚拟端点，并将需要投放的音频路由到该端点。
 
 ## 主要功能
 
 - 通过 AirPlay 2 将 Windows 系统声音发送到 HomePod。
 - 支持现有双 HomePod 立体声组合的同步播放。
+- 新增实验性双接收端软件立体声、独立硬件音量、按设备 PCM/ALAC 与 UDP/TCP 设置，以及 5 ms 音频连续性过渡。
 - 支持自动发现设备、PIN 配对和手动添加设备。
 - 支持网卡过滤，可在设置中选择用于发现设备的网卡。
 - 提供延迟模式、托盘运行、静音恢复、自动重连和连接诊断。
 - 在设置中提供 10 段均衡器，支持音效预设和即时试听。
-- 提供便携式 Windows x64 程序、英文和简体中文界面。
+- 支持采集指定应用及其子进程，或播放与录音端点，包括虚拟音频设备。
+- 支持静音超时后释放 AirPlay 会话，并在检测到声音后自动恢复。
+- 提供便携式 Windows x64 程序，支持英文、简体中文、繁体中文和德文界面。
 
 ## 功能计划
+
+设置方法、schema v4、协议与测试范围见 [音频连续性与软件立体声](audio-stereo-v3.md)。
+三星、Mac 和跨品牌组的实际出声、防爆音与声学同步仍待实机验收。
 
 - [ ] 支持杜比 Atmos。
 
@@ -96,7 +58,50 @@ airflash-cli stop
 2. 启动 AirFlash，等待接收端列表出现。
 3. 选择完整的 `HomePod stereo · 2/2` 项目并点击播放。
 4. 如果接收端要求 PIN，在“设置 > 接收器”中完成配对。
+   如果出现 `pairing rejected (TLV error [2])`，请在家庭 App 中
+   将扬声器访问权限设为“所有人”，然后重试。
 5. 如果默认设置不合适，在设置中选择采集端点和延迟模式。
+
+在 **设置 > 接收器** 中分别设置每个接收器的编码、采样率、UDP/TCP 传输和时钟策略。
+选项按接收器 `/info` 能力筛选，查询不会启动播放或触发配对。“自动”优先使用可用的
+44.1 kHz，其次为 48 kHz；未播放时括号显示预计选择，播放时显示实际协商结果。
+未应用的修改仍显示预计结果。离线或尚未检测的设备只提供自动选项，并保留已有显式值，
+标记为待验证。原生立体声组使用成员共同支持的组合；软件立体声组统一控制成员采样率，
+新组默认 44.1 kHz。
+
+主面板的 **全局延迟模式** 修改共享默认值。当前连接、播放或待机目标使用独立延迟时，
+该控件禁用，并提示前往 **设置 > 接收器** 调整；软件立体声组任一成员使用独立延迟时也一样。
+停止播放后恢复可编辑，设置页始终可以修改全局默认延迟。
+
+新安装及重置设置后默认选择 **正常 · 200 ms**，可选模式为实时、正常、缓冲和自定义。
+旧配置中的自适应延迟会在加载时迁移为正常模式；其他固定模式和自定义数值保持不变。
+
+在 **设置 > AirFlash streaming** 中，可以继续选择 120/200/500 ms 或 0–2000 ms 自定义目标，
+并单独开启 **强制固定延迟**。未开启时保留原有卡顿恢复；开启后不自动增加延迟或后移播放时间轴，
+小卡顿仍可补短静音、清理过时采集音频，较大卡顿则在原目标下按重连次数限制恢复。
+
+接收器设置可选择沿用全局、保留原恢复方式或强制固定。软件立体声启用强制时，
+所有成员必须使用相同的强制目标；策略或数值冲突会在播放前提示，不会自动修改组合和左右偏移。
+更改当前播放的策略或目标会重建会话。
+
+强制值低于接收器报告的下限时，程序提示后仍按设定值尝试，设备可能拒绝播放或没有声音。
+主面板区分请求值、引擎采用值和设备回报下限；这些调度值并非实测端到端声音延迟。
+未开启强制时仍按原协商规则处理接收器的下限。这里的延迟档位与 UDP/TCP 传输协议是独立设置。
+
+停止播放或取消连接后，按钮立即显示“正在断开”，旧会话清理完成后恢复播放操作。
+退出时程序继续读取引擎收尾输出，避免管道写满阻塞；停止过程共用两秒引擎退出预算，
+超时会结束本次会话的引擎进程。
+
+**设置 > 常规 > 重置并重启** 仅确认一次，然后清除全部设置和接收器配对。
+程序会停止播放与发现、恢复本地静音状态、关闭开机启动，删除 `config.json` 和
+`native-credentials`，再以默认设置重启。未保存的修改会丢弃，日志和引擎缓存保留。
+配置升级为 schema v4：删除全局采样率；v1–v3 中原先继承全局采样率的设备改为自动，
+已有的设备和软件组显式采样率保留。
+
+设备发现在控制面板或“设置 > 接收器”页面可见时运行；活动软件立体声组也保持拓扑监听。
+其他情况下两处都隐藏后暂停。
+暂停时保留上次结果，不会中断播放。如果启用了全局或单个设备的自动连接，
+程序启动后还会扫描 10 秒；之后打开设备列表即可恢复发现。
 
 AirFlash 使用全新的应用数据目录 `%APPDATA%/AirFlash` 和
 `%LOCALAPPDATA%/AirFlash`。它不会读取旧产品名称创建的配置、凭据或引擎
@@ -109,6 +114,33 @@ AirFlash 使用全新的应用数据目录 `%APPDATA%/AirFlash` 和
 版本预留与发布方法见 [发布流程](RELEASING.md)。
 
 矢量源图、资源生成与高 DPI 验收步骤见 [图标维护](ICONS.md)。
+
+在 **设置 > 音频采集** 中，**指定音频端点**列出活动的播放与录音设备，并标注类型。
+使用 Voicemeeter 时，选择对应 B1/B2/B3 总线的录音端点（例如 Voicemeeter Output），
+再在 Voicemeeter 中为所需音频启用对应总线。播放设备使用回环采集，录音设备直接采集输入；
+自动本地静音仅适用于播放设备，不会静音录音输入。
+
+### 指定应用与虚拟音频路由
+
+在 **设置 > 音频采集 > 指定应用** 中选择运行中的应用，可采集该应用及其子进程。
+浏览器按整个进程树采集，不区分标签页。原生模式需要 Windows build 20348 或更高版本；
+较旧系统仍可使用指定音频端点。选择按可执行文件路径保存，应用重启后会跟随唯一的匹配实例；
+出现多个独立实例时需重新选择。应用不可用时等待，不会退回全局采集。
+
+要让目标应用只在 HomePod 播放，同时让游戏和通知继续使用耳机，可安装
+[VB-CABLE](https://vb-audio.com/Cable/) 等虚拟声卡，再通过 **打开 Windows 音量混合器**
+仅将目标应用的输出设为 **CABLE Input**。采集来源可选择应用，或选择
+**指定音频端点 > CABLE Output · 录音**。关闭“侦听此设备”及本地监听。
+应用模式不会静音整个播放设备。停止 AirFlash 后，Windows 路由设置仍保留；
+需要本地播放时可自行改回。虚拟声卡不保证采集受 DRM 保护的内容，采集、重采样和格式转换
+也不保证逐位无损。
+
+### 静音自动待机
+
+在 **设置 > AirFlash 串流 > 待机** 中启用静音待机。默认关闭，静音时长默认 10 秒，
+可设置为 5–300 秒，也可为接收器单独设置。达到时长后释放 AirPlay 会话，
+本地继续检测声音；声音恢复后自动重新连接并播放当下音频。
+重连期间的开头或短提示音可能丢失。会话释放后，HomePod 自行管理电源状态。
 
 ## 技术栈
 
@@ -131,13 +163,17 @@ uv sync --locked
 pwsh scripts/build-native.ps1 -Check
 pwsh scripts/dotnet.ps1 restore AirFlash.sln --locked-mode
 pwsh scripts/dotnet.ps1 run --project AirFlash.App/AirFlash.App.csproj
-pwsh scripts/build.ps1
+pwsh scripts/build-dev.ps1
 ```
 
 构建生成：
 
-- `dist/AirFlash.exe`
-- `dist/AirFlash-X.Y.Z.msi`
+- `dist/dev/AirFlash.exe`
+- `dist/dev/AirFlash-X.Y.Z-dev.<commit>.msi`
+
+开发包以本地最近一个正式 `vX.Y.Z` 标签为基准，并附加当前提交号；它不会保留版本号或推送标签。安装开发 MSI 前，请先卸载已安装的同版本正式包。
+
+只有正式发版时才使用 `pwsh scripts/build-release.ps1`；它会要求干净的发布分支、保留下一个正式版本，并把产物写入 `dist/`。
 
 Rust 引擎会嵌入 WPF 可执行文件，运行时释放到
 `%LOCALAPPDATA%/AirFlash/engine/<hash>` 内容寻址缓存。
