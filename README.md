@@ -73,24 +73,30 @@ airflash-cli stop
 ```
 
 See [docs/LINUX.md](docs/LINUX.md) for dependencies, the systemd `--user`
-units, the full command reference and the PTP port setup described below.
+units, the full command reference and the PTP port setup described below,
+and [docs/HEADLESS.md](docs/HEADLESS.md) for the headless CLI package.
 
 ## Features
 
 - **Native AirPlay 2 streaming** — the same Rust sender as the Windows build:
   HAP pairing, PTP timing, encrypted RTP, PCM and ALAC (ALAC preferred, with
   an automatic codec retry — HomePods reject PCM-only setups).
-- **Real desktop audio capture on Linux** — `--source loopback` captures the
+- **Real audio capture on Linux** — `--source loopback` captures the
   default PipeWire sink monitor through explicitly linked monitor ports (the
   microphone is never picked up by name matching); on PulseAudio-only hosts it
-  falls back to `parec`. `--monitor NAME` selects a different sink.
+  falls back to `parec`. `--monitor NAME` — or the capture-device picker in
+  **Settings → Audio source** — selects any other capture device: another
+  sink's monitor, or a source recorded directly, such as a microphone, a USB
+  audio input or a Bluetooth A2DP source.
 - **HomePod and HomePod stereo pairs** — single receivers and existing
   two-device stereo pairs, including per-receiver volume — **now with
   support for HomePod OS 26** (AirPlay 2).
 - **Graphical panel and headless CLI** — an Avalonia panel sharing the Windows
   build's core (receiver list, equalizer, diagnostics, settings), plus a
   scriptable `airflash-cli` with daemon mode, JSON output and
-  `systemd --user` units.
+  `systemd --user` units. A slim `-cli.tar.gz` package (engine + CLI +
+  units only, built for glibc 2.35+) runs the CLI on headless machines
+  such as a Raspberry Pi.
 - **Latency controls** — Real-time (120 ms target), Normal (200 ms, default),
   Buffered and Custom modes, with an optional forced fixed latency. Targets
   are scheduling values, not measured end-to-end acoustic latency.
@@ -101,6 +107,22 @@ units, the full command reference and the PTP port setup described below.
   Python or other runtime to install. The arm64 build is not
   hardware-qualified yet.
 - English and Simplified Chinese UI.
+
+## More ways to play
+
+- **A Raspberry Pi as an always-on streamer.** Install the `-cli` package
+  on a headless Pi, enable the shipped systemd user unit, and point any
+  player on the Pi (MPD, mopidy, a browser) at its output — the Pi becomes
+  a dedicated AirPlay sender for the HomePod.
+- **Give the HomePod a Bluetooth input.** Pair a phone with the Linux
+  machine (BlueZ + PipeWire) and the phone appears as a Bluetooth capture
+  source: pick it, and whatever the phone plays comes out of the HomePod.
+- **Microphones and USB inputs.** A microphone makes a simple announcement
+  or intercom feed; a USB turntable or a mixer through a USB sound adapter
+  turns any line-level source into an AirPlay source.
+- **Announcements from scripts.** Generate a WAV (for example with a local
+  TTS) and play it through the file source — a natural fit next to Home
+  Assistant on the same box.
 
 ## Tested on real hardware
 
@@ -117,6 +139,10 @@ receivers. Summary (last updated November 2026):
 Other glibc-based distributions should work — the runtime needs little more
 than glibc and PipeWire or PulseAudio — but only the environment above is
 hardware-tested. Reports from other distributions are very welcome.
+Separately, capture from a real PipeWire source (a machine's analog
+microphone input) is verified at the capture layer; end-to-end playback
+from microphone, USB and Bluetooth sources has not been hardware-qualified
+yet.
 
 ## How it compares
 
@@ -148,9 +174,9 @@ hardware-tested. Reports from other distributions are very welcome.
 ## Limitations
 
 - Audio only: no screen mirroring or video, and no Dolby Atmos.
-- Per-application capture is currently a Windows feature; on Linux, capture
-  is the system-wide sink monitor (route an app to a dedicated sink if you
-  need it isolated).
+- Per-application capture is currently a Windows feature. On Linux you can
+  capture any sink monitor or source device, but not a single app's stream
+  (route the app to a dedicated sink if you need it isolated).
 - Discovery uses a built-in minimal mDNS querier: no continuous browsing and
   no IPv6 link-local answers.
 - The tray icon is not available on every desktop environment.
