@@ -210,14 +210,31 @@ public sealed class AppViewModel : ObservableObject, IAsyncDisposable
         foreach (var receiver in list) _known[receiver.Id] = receiver;
         MergeManualReceivers();
         if (!CatalogEqual(before, AllReceivers)) { RefreshReceivers(); CatalogChanged?.Invoke(); }
+        currentSnapshot = Session.Snapshot;
         if (currentSnapshot.Receiver is { IsManual: false } current)
         {
             var id = ReceiverMigrations.GetValueOrDefault(current.Id, current.Id);
-            if (!discovered.TryGetValue(id, out var next) || !next.Complete)
+            if (current.IsSoftwareGroup)
             {
-                if (currentSnapshot.IsActive) await Session.StopAsync();
+                var resolved = SoftwareStereo.Resolve(_known.Values, _settings).FirstOrDefault(r => r.Id == id);
+                if (resolved?.Members.Any(m => m.IsGroup || m.StereoId.Length > 0) == true)
+                {
+                    if (await Session.StopForDiscoveryConflictAsync(currentSnapshot))
+                        ShowError(new IOException(L.Get("Stereo groups require two distinct independent receivers.")));
+                    return;
+                }
+                if (resolved is { Online: true, Complete: true }) discovered[id] = resolved;
             }
-            else if (!ReceiverEqual(current, next) || !SettingsMerge.Equal(originalSettings, _settings)) await Session.UpdateReceiverAsync(next, _settings.Clone());
+            // Discovery snapshots can be incomplete while scanning or suspended.
+            // The transport health checks own disconnect detection during playback,
+            // and RefreshReceiverAsync only remaps identities: a discovery refresh
+            // must never tear down or restart a working transport. (This mirrors
+            // the Windows panel's reconciliation; the previous code stopped the
+            // session when a round missed the receiver and restarted it whenever
+            // the refreshed record differed, which raced the receiver's release
+            // of the previous session and surfaced as ownership_unconfirmed.)
+            if (currentSnapshot.State != PlaybackState.Pairing && discovered.TryGetValue(id, out var next) && next.Complete)
+                await Session.RefreshReceiverAsync(next, currentSnapshot, ReceiverMigrations);
         }
         ScheduleAutoConnect();
     }

@@ -636,6 +636,7 @@ public sealed class SessionController(IEngineFactory factory, IAudioService audi
                 receiver = _receiver;
             }
             var startedAt = 0L;
+            var ownershipCooldown = false;
             try
             {
                 var settings = _settings;
@@ -909,18 +910,41 @@ public sealed class SessionController(IEngineFactory factory, IAudioService audi
                 Publish(epoch, FailureState(notice), FailureMessage(receiver, notice), failure: notice);
                 // A preempted receiver belongs to another controller now; retrying
                 // would fight it. The user gets an explicit reconnect action instead.
-                if (notice.Code is "preempted" or "ownership_unconfirmed")
+                if (notice.Code is "preempted")
                 {
                     log?.Invoke($"Session automatic recovery blocked; code={notice.Code}; manual_reconnect_required=true");
                     return;
                 }
-                if (!(_settings.ForceReconnect || receiver.IsSoftwareGroup || notice.Code is "timeline_expired" or "clock_lost" or "adaptive_rebuild") || attempts > _settings.MaxReconnectAttempts || notice.Retryable == false || notice.Retryable is null && IsAuthenticationFailure(error.Message)) return;
+                // ownership_unconfirmed is weaker evidence than a takeover: the
+                // receiver may simply not have released *our own* previous session
+                // yet (a settings restart or a quick manual replay races its
+                // teardown, and the fresh engine cannot know the busy session was
+                // ours). When the user asked for forced reconnects, cool down and
+                // retry inside the normal attempt budget instead of giving up at
+                // once; exhausting the budget still lands on the blocked path.
+                ownershipCooldown = notice.Code is "ownership_unconfirmed";
+                if (ownershipCooldown && (!_settings.ForceReconnect || attempts > _settings.MaxReconnectAttempts))
+                {
+                    log?.Invoke($"Session automatic recovery blocked; code={notice.Code}; manual_reconnect_required=true");
+                    return;
+                }
+                // Committing to an automatic retry supersedes the manual-recovery
+                // latch RecordFailure set for this fault; if the budget runs out,
+                // the final attempt's RecordFailure sets it again.
+                if (ownershipCooldown) lock (_sync) _manualRecoveryRequired = false;
+                if (!(_settings.ForceReconnect || receiver.IsSoftwareGroup || notice.Code is "timeline_expired" or "clock_lost" or "adaptive_rebuild") || attempts > _settings.MaxReconnectAttempts || notice.Retryable == false && !ownershipCooldown || notice.Retryable is null && IsAuthenticationFailure(error.Message)) return;
                 // This is the one reconnect notion the desktop already has; the
                 // companion record only reports it, it does not add a second one.
                 ++reconnects;
                 transportFaults.Add(notice.Code);
             }
-            var delay = TimeSpan.FromMilliseconds(Math.Min(_timing.Retry.TotalMilliseconds * Math.Pow(2, attempts - 1), 8000));
+            var backoff = TimeSpan.FromMilliseconds(Math.Min(_timing.Retry.TotalMilliseconds * Math.Pow(2, attempts - 1), 8000));
+            // An ownership retry must outwait the receiver's release of the
+            // previous session; the transport backoff (seconds at most) is far
+            // too short and would burn the whole budget against a busy receiver.
+            // Ten retry units is 10 s at the default timing.
+            var cooldown = TimeSpan.FromTicks(_timing.Retry.Ticks * 10);
+            var delay = ownershipCooldown && cooldown > backoff ? cooldown : backoff;
             log?.Invoke($"Session reconnect reason=transport_fault; code={_diagnostics.LastFault?.Code}; attempt={attempts}; delay_ms={delay.TotalMilliseconds}");
             Publish(epoch, PlaybackState.Connecting, L.Format("Disconnected; reconnecting ({0}/{1})", attempts, _settings.MaxReconnectAttempts));
             await Task.Delay(delay, cancellation).ConfigureAwait(false);

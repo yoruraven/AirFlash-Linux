@@ -1022,17 +1022,37 @@ fn csv_field(value: &str) -> String {
     }
 }
 
-/// Where the per-user summary lives: next to the WPF logs, which is the same
-/// `%APPDATA%\AirFlash` root the engine already uses for credentials. This
-/// mirrors `AppPaths.LogDirectory` on the engine side instead of inventing a
-/// second location.
+/// Where the per-user summary lives: next to the desktop logs, which is the
+/// same per-user AirFlash root the desktop already uses for credentials. This
+/// mirrors `DesktopSessionLog.DefaultPath` on the engine side instead of
+/// inventing a second location: `%APPDATA%\AirFlash` on Windows, and the XDG
+/// config directory (`$XDG_CONFIG_HOME` or `~/.config`, the Unix resolution
+/// of `Environment.SpecialFolder.ApplicationData`) elsewhere. The previous
+/// implementation read APPDATA unconditionally, so on Linux the summary
+/// landed in a relative `AirFlash/logs` under the process working directory.
 pub fn summary_path() -> PathBuf {
-    std::env::var_os("APPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_default()
-        .join("AirFlash")
-        .join("logs")
-        .join("session-summary.csv")
+    #[cfg(windows)]
+    {
+        std::env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_default()
+            .join("AirFlash")
+            .join("logs")
+            .join("session-summary.csv")
+    }
+    #[cfg(not(windows))]
+    {
+        let root = match std::env::var_os("XDG_CONFIG_HOME") {
+            Some(path) => PathBuf::from(path),
+            None => std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".config"),
+        };
+        root.join("AirFlash")
+            .join("logs")
+            .join("session-summary.csv")
+    }
 }
 
 /// Append one row, writing the header first when the file is new. Callers treat

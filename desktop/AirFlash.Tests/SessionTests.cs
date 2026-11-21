@@ -825,8 +825,7 @@ public sealed class SessionTests
     }
     [Theory]
     [InlineData("preempted")]
-    [InlineData("ownership_unconfirmed")]
-    public async Task OwnershipFaultRestoresSoundAndRequiresExplicitManualReconnect(string code)
+    public async Task PreemptedFaultRestoresSoundAndRequiresExplicitManualReconnect(string code)
     {
         var first = new FakeConnection(); var second = new FakeConnection();
         var factory = new FakeFactory(first, second); var audio = new FakeAudio();
@@ -851,6 +850,44 @@ public sealed class SessionTests
         await Until(() => controller.Snapshot.State == PlaybackState.Streaming);
         Assert.False(controller.RequiresManualReconnect); Assert.Equal(2, factory.OpenCount);
         Assert.Equal("manual", second.Commands.Single(c => c.Command == "start").Parameters.Text("intent"));
+    }
+    [Fact]
+    public async Task OwnershipFaultRetriesAfterCooldownWhenForceReconnectEnabled()
+    {
+        var first = new FakeConnection(); var second = new FakeConnection();
+        var factory = new FakeFactory(first, second); var audio = new FakeAudio();
+        await using var controller = new SessionController(factory, audio, timing: Fast);
+        var settings = Settings(); settings.ForceReconnect = true; settings.MaxReconnectAttempts = 2;
+        await controller.StartAsync(Pod(), settings, SessionStartIntent.Automatic);
+        await Until(() => controller.Snapshot.State == PlaybackState.Streaming);
+        first.EmitData(new { @event = "error", code = "ownership_unconfirmed", channel = "preemption", retryable = false, message = "ownership test" });
+        // The busy verdict may only mean the receiver has not released our own
+        // previous session yet: with forced reconnects the desktop cools down
+        // (ten retry units) and retries on its own instead of parking on a
+        // manual reconnect.
+        await second.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(first.Disposed); Assert.NotEqual(first.Session, second.Session);
+        Assert.Equal("automatic", second.Commands.Single(c => c.Command == "start").Parameters.Text("intent"));
+        await Until(() => controller.Snapshot.State == PlaybackState.Streaming);
+        Assert.False(controller.RequiresManualReconnect);
+    }
+    [Fact]
+    public async Task OwnershipFaultRequiresManualReconnectWhenForceReconnectDisabled()
+    {
+        var first = new FakeConnection(); var second = new FakeConnection();
+        var factory = new FakeFactory(first, second); var audio = new FakeAudio();
+        await using var controller = new SessionController(factory, audio, timing: Fast);
+        var settings = Settings(); settings.ForceReconnect = false;
+        await controller.StartAsync(Pod(), settings, SessionStartIntent.Automatic);
+        await Until(() => controller.Snapshot.State == PlaybackState.Streaming);
+        Assert.True(audio.Muted);
+        first.EmitData(new { @event = "error", code = "ownership_unconfirmed", channel = "preemption", retryable = false, message = "ownership test" });
+        await Until(() => first.Disposed && controller.RequiresManualReconnect);
+        Assert.False(audio.Muted);
+        Assert.Equal(PlaybackState.Error, controller.Snapshot.State);
+        // Well past the cooldown: no automatic attempt may have happened.
+        await Task.Delay(TimeSpan.FromMilliseconds(500));
+        Assert.Equal(1, factory.OpenCount);
     }
     [Fact]
     public async Task ClockFaultLoopDoesNotReplenishRetriesFromStreamingUptime()
