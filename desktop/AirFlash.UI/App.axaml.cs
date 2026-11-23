@@ -14,6 +14,7 @@ namespace AirFlash.UI;
 public partial class App : Application
 {
     private TrayIcon? _tray;
+    private Views.MainWindow? _mainWindow;
     private WindowIcon? _icon;
     private SingleInstance? _single;
     private IClassicDesktopStyleApplicationLifetime? _desktop;
@@ -29,6 +30,9 @@ public partial class App : Application
             return;
         }
         _desktop = desktop;
+        // The tray keeps the app alive with no window shown, so nothing but
+        // Quit may end the process: never tie shutdown to a window closing.
+        desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
         // The lock is taken in Program.Main, before Avalonia starts.
         _single = AppHost.Instance ?? new SingleInstance();
         _single.Listen(() => Dispatcher.UIThread.Post(ShowPanel));
@@ -54,14 +58,20 @@ public partial class App : Application
                 window.Hide();
             }
         };
-        desktop.MainWindow = window;
+        // Do NOT assign desktop.MainWindow here. Avalonia shows whatever is
+        // assigned to MainWindow automatically as soon as this method
+        // returns, regardless of IsVisible or a later Hide() — that is what
+        // made every --tray autostart pop the panel on login. The window is
+        // kept in _mainWindow and only becomes MainWindow in ShowPanel(),
+        // when it is actually meant to be seen.
+        _mainWindow = window;
         ConfigureTray();
         ViewModel.Start();
         // The autostart entry launches with --tray: stay in the tray and
         // only show the panel on demand (tray menu or a second launch).
-        var startInTray = desktop.Args is { } cliArgs && Array.IndexOf(cliArgs, "--tray") >= 0;
+        var startInTray = StartsInTray(desktop.Args);
         ViewModel.Startup.ContinueWith(
-            _ => Dispatcher.UIThread.Post(() => { if (!startInTray) window.Show(); }),
+            _ => Dispatcher.UIThread.Post(() => { if (!startInTray) ShowPanel(); }),
             TaskScheduler.Default);
         base.OnFrameworkInitializationCompleted();
     }
@@ -107,9 +117,17 @@ public partial class App : Application
         };
     }
 
+    /// <summary>True when the launch asks for tray-only start (autostart).</summary>
+    internal static bool StartsInTray(string[]? args) =>
+        args is not null && Array.IndexOf(args, "--tray") >= 0;
+
     public void ShowPanel()
     {
-        if (_desktop?.MainWindow is not { } window) return;
+        if (_mainWindow is not { } window) return;
+        // Becoming MainWindow is safe now: the framework's automatic show
+        // only happens for a MainWindow assigned during initialization.
+        if (_desktop is not null && _desktop.MainWindow is null)
+            _desktop.MainWindow = window;
         window.Show();
         window.WindowState = WindowState.Normal;
         window.Activate();
